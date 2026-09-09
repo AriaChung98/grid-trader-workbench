@@ -187,6 +187,9 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .hold-ratio .rr-track.rr-near{background:#F9EAD0}
 .hold-ratio .rr-track.rr-ok{background:#E2F1E8}
 .hold-ratio .rr-out{position:absolute;top:0;bottom:0;background:rgba(192,57,43,.22);z-index:0}
+.hold-ratio .rr-cell{position:absolute;top:0;bottom:0;background:rgba(26,86,196,.15);z-index:0;border-left:1px dashed rgba(26,86,196,.5);border-right:1px dashed rgba(26,86,196,.5)}
+.hold-ratio .rr-celltxt{margin-top:7px;font-size:12px;color:var(--ink)}
+.hold-ratio .rr-celltxt b{color:#1A56C4;font-weight:600;font-variant-numeric:tabular-nums}
 .hold-ratio .rr-tick{position:absolute;top:7px;bottom:7px;width:1px;background:rgba(0,0,0,.16);z-index:1}
 .hold-ratio .rr-rail{position:absolute;top:0;bottom:0;width:2px;background:#C0392B;z-index:2}
 .hold-ratio .rr-base{position:absolute;top:0;bottom:0;width:2px;background:var(--ink);z-index:2}
@@ -1131,13 +1134,28 @@ function renderRailRisk(g, sm){
     if(cur<=lower){ const L=pctOf(dLo), W=pctOf(lower)-L; outHtml=`<i class="rr-out" style="left:${L}%;width:${W}%"></i>`; }
     else { const L=pctOf(upper), W=pctOf(dHi)-L; outHtml=`<i class="rr-out" style="left:${L}%;width:${W}%"></i>`; }
   }
-  /* 逐档网格刻度线：基准档(深色) / 上下轨边界(红) / 中间各档(浅灰) */
-  const ticks=[];
+  /* 逐档网格刻度线：基准档(深色) / 上下轨边界(红) / 中间各档(浅灰)；同时记录每档价位用于定位"当前档位格子" */
+  const ticks=[], lines=[];
   for(let k=-c.downGrids;k<=c.upGrids;k++){
     const price=base*Math.pow(1+sp,k), p=pctOf(price);
+    lines.push({k,price});
     if(k===-c.downGrids || k===c.upGrids) ticks.push(`<i class="rr-rail" style="left:${p}%"></i>`);
     else if(k===0) ticks.push(`<i class="rr-base" style="left:${p}%"></i>`);
     else ticks.push(`<i class="rr-tick" style="left:${p}%"></i>`);
+  }
+  /* 当前档位格子：定位现价落在哪两档之间（几何网格），高亮该格并标注 */
+  let cellHtml="", cellLabel, cellLow, cellHigh;
+  if(cur<=lower){ cellLabel="已破下轨 · 处于网格之外"; cellLow=lower; cellHigh=lower; }
+  else if(cur>=upper){ cellLabel="已破上轨 · 处于网格之外"; cellLow=upper; cellHigh=upper; }
+  else {
+    let j=0; for(let i=0;i<lines.length-1;i++){ if(cur>=lines[i].price && cur<lines[i+1].price){ j=i; break; } }
+    cellLow=lines[j].price; cellHigh=lines[j+1].price;
+    const kj=lines[j].k;
+    if(Math.abs(cur-base) < base*sp*0.5) cellLabel="基准档";
+    else if(kj>=0) cellLabel=`基准上方第 ${kj+1} 格`;
+    else cellLabel=`基准下方第 ${-kj} 格`;
+    const L=pctOf(cellLow), W=pctOf(cellHigh)-L;
+    cellHtml=`<i class="rr-cell" style="left:${L}%;width:${W}%"></i>`;
   }
   const curPct=pctOf(cur);
   const trackCls = breached? "rr-breach" : (tone==="warn"? "rr-near":"rr-ok");
@@ -1151,6 +1169,7 @@ function renderRailRisk(g, sm){
     <div class="rr-ttl">穿轨风险<span class="rr-sub">现价 vs 网格上下轨（基准 ¥${fmt(base,3)} · 每格 ${(sp*100).toFixed(2)}%）</span></div>
     <div class="rr-track ${trackCls}">
       ${outHtml}
+      ${cellHtml}
       ${ticks.join("")}
       <i class="rr-now" style="left:${curPct}%"></i>
     </div>
@@ -1159,6 +1178,7 @@ function renderRailRisk(g, sm){
       <span class="rr-cur">现价 ¥${fmt(cur,3)}${depthTxt}</span>
       <span>上轨 ¥${fmt(upper,3)}</span>
     </div>
+    <div class="rr-celltxt">当前档位：<b>${cellLabel}</b>${ (cur>lower && cur<upper)? `（¥${fmt(cellLow,3)} ~ ¥${fmt(cellHigh,3)}）` : "" }</div>
     <div class="rr-legend">
       <span><i class="rr-dot" style="background:var(--ink)"></i>基准档</span>
       <span><i class="rr-dot" style="background:#C0392B"></i>上下轨边界</span>
