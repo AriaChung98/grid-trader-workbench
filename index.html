@@ -182,14 +182,22 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .hold-ratio .rr{margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)}
 .hold-ratio .rr-ttl{font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px}
 .hold-ratio .rr-sub{font-weight:400;color:var(--muted);font-size:11px;margin-left:7px}
-.hold-ratio .rr-track{position:relative;height:16px;border-radius:8px;background:var(--line);margin:2px 0}
-.hold-ratio .rr-track.rr-breach{background:#F4CFC9}
-.hold-ratio .rr-track.rr-near{background:#F6E6C6}
-.hold-ratio .rr-track.rr-ok{background:#DCEFE3}
-.hold-ratio .rr-mark{position:absolute;top:50%;width:12px;height:12px;border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 0 0 2px #fff;z-index:2}
-.hold-ratio .rr-axis{display:flex;justify-content:space-between;align-items:center;font-size:10.5px;color:var(--muted);margin-top:5px}
+.hold-ratio .rr-track{position:relative;height:30px;border-radius:7px;background:var(--line);margin:6px 0 2px;overflow:hidden}
+.hold-ratio .rr-track.rr-breach{background:#F6D8D2}
+.hold-ratio .rr-track.rr-near{background:#F9EAD0}
+.hold-ratio .rr-track.rr-ok{background:#E2F1E8}
+.hold-ratio .rr-out{position:absolute;top:0;bottom:0;background:rgba(192,57,43,.22);z-index:0}
+.hold-ratio .rr-tick{position:absolute;top:7px;bottom:7px;width:1px;background:rgba(0,0,0,.16);z-index:1}
+.hold-ratio .rr-rail{position:absolute;top:0;bottom:0;width:2px;background:#C0392B;z-index:2}
+.hold-ratio .rr-base{position:absolute;top:0;bottom:0;width:2px;background:var(--ink);z-index:2}
+.hold-ratio .rr-now{position:absolute;top:-3px;bottom:-3px;width:3px;background:#1A56C4;transform:translateX(-50%);z-index:4;box-shadow:0 0 0 2px #fff;border-radius:2px}
+.hold-ratio .rr-now::after{content:"";position:absolute;top:-9px;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:#1A56C4}
+.hold-ratio .rr-axis{display:flex;justify-content:space-between;align-items:flex-end;font-size:10.5px;color:var(--muted);margin-top:4px}
 .hold-ratio .rr-axis .rr-cur{font-weight:600;color:var(--ink)}
-.hold-ratio .rr-badge{display:inline-block;margin-top:6px;padding:2px 10px;border-radius:11px;font-size:12px;font-weight:600}
+.hold-ratio .rr-axis b{color:#B03021;font-weight:600}
+.hold-ratio .rr-legend{display:flex;gap:14px;font-size:10.5px;color:var(--muted);margin-top:7px}
+.hold-ratio .rr-dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:middle}
+.hold-ratio .rr-badge{display:inline-block;margin-top:7px;padding:2px 10px;border-radius:11px;font-size:12px;font-weight:600}
 .hold-ratio .rr-badge.b-down{background:#F8D7D2;color:#B03021}
 .hold-ratio .rr-badge.b-warn{background:#FBF0D8;color:#8a5a10}
 .hold-ratio .rr-badge.b-ok{background:#E4F3EA;color:#2f6b4a}
@@ -1110,18 +1118,52 @@ function renderRailRisk(g, sm){
     else if(nearDn){ status="接近下轨"; tone="warn"; desc=`现价距下轨 ¥${fmt(lower,3)} 不足一格，临近向下穿轨（现金可能即将耗尽、被套风险上升）。`; }
     else { status="区间内（网格有效）"; tone="ok"; desc=`现价位于上下轨之间，网格双向触发均有效。`; }
   }
-  const span=upper-lower;
-  let posPct = span>0 ? (cur-lower)/span*100 : 50;
-  posPct = Math.max(0, Math.min(100, posPct));   // 标记夹在轨道内；越界由配色/徽标表达
+  const span=upper-lower, slack=span*0.06;
+  let dLo=lower-slack, dHi=upper+slack;
+  if(cur<dLo) dLo=cur-slack;
+  if(cur>dHi) dHi=cur+slack;
+  const dSpan=dHi-dLo;
+  const pctOf=(p)=> Math.max(0, Math.min(100,(p-dLo)/dSpan*100));
   const breached=(cur>=upper || cur<=lower);
+  /* 穿轨外区域阴影 */
+  let outHtml="";
+  if(breached){
+    if(cur<=lower){ const L=pctOf(dLo), W=pctOf(lower)-L; outHtml=`<i class="rr-out" style="left:${L}%;width:${W}%"></i>`; }
+    else { const L=pctOf(upper), W=pctOf(dHi)-L; outHtml=`<i class="rr-out" style="left:${L}%;width:${W}%"></i>`; }
+  }
+  /* 逐档网格刻度线：基准档(深色) / 上下轨边界(红) / 中间各档(浅灰) */
+  const ticks=[];
+  for(let k=-c.downGrids;k<=c.upGrids;k++){
+    const price=base*Math.pow(1+sp,k), p=pctOf(price);
+    if(k===-c.downGrids || k===c.upGrids) ticks.push(`<i class="rr-rail" style="left:${p}%"></i>`);
+    else if(k===0) ticks.push(`<i class="rr-base" style="left:${p}%"></i>`);
+    else ticks.push(`<i class="rr-tick" style="left:${p}%"></i>`);
+  }
+  const curPct=pctOf(cur);
   const trackCls = breached? "rr-breach" : (tone==="warn"? "rr-near":"rr-ok");
-  const mkColor = tone==="down"? "#C0392B" : (tone==="warn"? "#C98A1B":"#2f855a");
   const badgeCls = tone==="down"? "b-down" : (tone==="warn"? "b-warn":"b-ok");
+  /* 穿轨深度（越过多少格） */
+  let depthTxt="";
+  if(cur<=lower){ const eg=(lower-cur)/(lower*sp); depthTxt=` · 已跌破下轨外 <b>${eg.toFixed(1)}</b> 格`; }
+  else if(cur>=upper){ const eg=(cur-upper)/(upper*sp); depthTxt=` · 已突破上轨外 <b>${eg.toFixed(1)}</b> 格`; }
   return `
   <div class="rr">
-    <div class="rr-ttl">穿轨风险<span class="rr-sub">现价 vs 网格上下轨（基准 ¥${fmt(base,3)}）</span></div>
-    <div class="rr-track ${trackCls}"><i class="rr-mark" style="left:${posPct}%;background:${mkColor}"></i></div>
-    <div class="rr-axis"><span>下轨 ¥${fmt(lower,3)}</span><span class="rr-cur">现价 ¥${fmt(cur,3)}</span><span>上轨 ¥${fmt(upper,3)}</span></div>
+    <div class="rr-ttl">穿轨风险<span class="rr-sub">现价 vs 网格上下轨（基准 ¥${fmt(base,3)} · 每格 ${(sp*100).toFixed(2)}%）</span></div>
+    <div class="rr-track ${trackCls}">
+      ${outHtml}
+      ${ticks.join("")}
+      <i class="rr-now" style="left:${curPct}%"></i>
+    </div>
+    <div class="rr-axis">
+      <span>下轨 ¥${fmt(lower,3)}</span>
+      <span class="rr-cur">现价 ¥${fmt(cur,3)}${depthTxt}</span>
+      <span>上轨 ¥${fmt(upper,3)}</span>
+    </div>
+    <div class="rr-legend">
+      <span><i class="rr-dot" style="background:var(--ink)"></i>基准档</span>
+      <span><i class="rr-dot" style="background:#C0392B"></i>上下轨边界</span>
+      <span><i class="rr-dot" style="background:#1A56C4"></i>现价</span>
+    </div>
     <div class="rr-badge ${badgeCls}">${status}</div>
     <div class="rr-desc">${desc}</div>
   </div>`;
