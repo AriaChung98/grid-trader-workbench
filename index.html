@@ -3814,6 +3814,19 @@ function bindNewGrid(){
 /* ============ 结果渲染（详情用） ============ */
 function renderResults(){ /* 回测摘要已内联至详情页，无需独立渲染 */ }
 
+/* 提示确认（"今日已处理"确定 / "备份提醒"已备份）：localStorage 记录，点了就不再提示
+   ackId 命名：备份提醒 -> "bak:<gridId>"（按网格长期静音）；今日已处理 -> "done:<gridId>:<今日>"（按日重置） */
+const KEY_ACK="gt_ack_v1";
+function ackGet(id){
+  try{ const o=JSON.parse(localStorage.getItem(KEY_ACK)||"{}"); return !!o[id]; }catch(e){ return false; }
+}
+function ackSet(id){
+  try{ const o=JSON.parse(localStorage.getItem(KEY_ACK)||"{}"); o[id]=true; localStorage.setItem(KEY_ACK, JSON.stringify(o)); }catch(e){}
+  try{ toast("已确认，不再提示"); }catch(e){}
+  render();
+}
+function ackBand(id){ ackSet(id); }
+
 function renderBandGrid(g, sm, posHold){
   const cur=sm.cur, c=g.cond.params, gl=gridLevels(c);
   const icon=`<svg viewBox="0 0 24 24" fill="none" stroke="#9A6B1F" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>`;
@@ -3835,7 +3848,7 @@ function renderBandGrid(g, sm, posHold){
   const {base,buyNext,sellNext}=nextTriggerLines(c, g.trades, cur);
   const trig=gridTriggerStatus(g,cur);   // 实时价（含当日 high/low 全部时点）对比下个买卖触发点
   const items=[];
-  if(g.trades.length>=30) items.push(`<span class="tag info">备份提醒</span> 该网格已积累 ${g.trades.length} 笔交易，建议导出 JSON 备份。`);
+  if(g.trades.length>=30 && !ackGet("bak:"+g.id)) items.push(`<span class="tag info">备份提醒</span> 该网格已积累 ${g.trades.length} 笔交易，建议导出 JSON 备份。<button class="btn sm" style="margin-left:10px" onclick="ackBand('bak:${g.id}')">已备份</button>`);
   if(cur<gl.lower) items.push(`<span class="tag urgent">跌破下限</span> 当前价 ¥${fmt(cur,3)} 跌破网格下限 ¥${fmt(gl.lower,3)}，建议修改条件单。`);
   if(cur>gl.upper) items.push(`<span class="tag urgent">突破上限</span> 当前价 ¥${fmt(cur,3)} 突破网格上限 ¥${fmt(gl.upper,3)}，建议上移基准或加格。`);
   if(g.trades.length===0) items.push(`<span class="tag info">待建仓</span> 尚未录入交易，请先「新建交易」或导入历史成交。`);
@@ -3852,7 +3865,8 @@ function renderBandGrid(g, sm, posHold){
   const dirsTxt = trig.sides.length? trig.sides.map(s=> s==='buy'?'买入':'卖出').join(' + ') : '';
   if(todaysGrid.length>0){
     const dirTxt = dirsTxt? `（今日触发网格·${dirsTxt}，按最新基准价 ¥${fmt(trig.base,3)} 计算）` : '';
-    items.push(`<span class="tag ok">今日已处理</span> 今日已录入 <b>${todaysGrid.length}</b> 笔成交${dirTxt}，无需重复录入。`);
+    const ackDone="done:"+g.id+":"+todayISO();
+    if(!ackGet(ackDone)) items.push(`<span class="tag ok">今日已处理</span> 今日已录入 <b>${todaysGrid.length}</b> 笔成交${dirTxt}，无需重复录入。<button class="btn sm" style="margin-left:10px" onclick="ackBand('${ackDone}')">确定</button>`);
   } else if(trig.triggered){
     const parts=[];
     if(trig.sides.includes('buy')) parts.push(`下个买点 ¥${fmt(trig.buyNext,3)}`);
