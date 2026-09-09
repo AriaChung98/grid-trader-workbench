@@ -406,7 +406,8 @@ tbody tr:hover{background:#FBFAF7}
   .trade-mini{display:grid;grid-template-columns:repeat(auto-fit,minmax(94px,1fr));gap:8px 8px;align-items:end}
   .trade-mini .fld{flex:none;min-width:0;width:100%;margin:0}
   .trade-mini .fld input,.trade-mini .fld select{width:100%;box-sizing:border-box}
-  .trade-mini input[type="date"]{appearance:none;-webkit-appearance:none;background:var(--surface)}
+  .trade-mini input[type="date"]{appearance:none;-webkit-appearance:none;background:var(--surface);height:42px;font-size:14px;line-height:42px;padding:0 10px;box-sizing:border-box}
+  .trade-mini .fld-date{grid-column:span 2}   /* 窄屏下日期字段占满更宽，避免原生日期文本换行成两行 */
   .trade-mini .fld-submit{grid-column:span 2}
   .trade-mini .fld-submit .btn{width:100%;height:44px;justify-content:center}
   .trade-form-grid .fld-submit{grid-column:1/-1}
@@ -3477,7 +3478,7 @@ function renderDetail(g){
       <div class="card-body">
         <form onsubmit="return addTrade(event,'${g.id}')" id="tradeForm">
           <div class="trade-mini">
-            <div class="fld"><label>日期</label><input type="date" id="t_date" onchange="onTradeDateChange('${g.id}')" required></div>
+            <div class="fld fld-date"><label>日期</label><input type="date" id="t_date" onchange="onTradeDateChange('${g.id}')" required></div>
             <div class="fld"><label>类型</label>
               <select id="t_type"><option value="建仓">建仓（底仓）</option><option value="买入">买入（网格）</option><option value="卖出">卖出（网格）</option></select>
             </div>
@@ -4619,15 +4620,17 @@ function fetchMarketEM(code){
     return {name:price.name, price:price.price, high52,low52,high60,low60,dailyVol:rstd,annVol, kline:chart, source:"eastmoney", fetchedAt:todayISO()};
   });
 }
-/* 当日分时（1分钟）K线：用于成交驱动网格自动录入，按时间顺序扫描穿越。字段顺序 [time,open,close,high,low,...] */
+/* 当日分时（1分钟）K线：用于成交驱动网格自动录入，按时间顺序扫描穿越。字段顺序 [time,open,close,high,low,...]
+   失败自动重试一次（东方财富分时 API 在弱网下偶发超时/空响应，重试可显著提升移动端取到完整当日分时的概率） */
 function fetchIntradayEM(code){
   const secid=emSecid(code);
   const end=todayISO().replace(/-/g,""); const beg=end;
-  return fetchWithTimeout(`https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&klt=1&fqt=0&beg=${beg}&end=${end}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57,f58`, 9000)
-    .then(r=>r.json()).then(d=>{
-      if(!d||!d.data||!d.data.klines||!d.data.klines.length) return [];
-      return d.data.klines.map(x=>{ const a=x.split(","); return {t:a[0], open:+a[1], close:+a[2], high:+a[3], low:+a[4]}; });
-    }).catch(()=>[]);
+  const url=`https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&klt=1&fqt=0&beg=${beg}&end=${end}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57,f58`;
+  const parse=r=>r.json().then(d=>{
+    if(!d||!d.data||!d.data.klines||!d.data.klines.length) return [];
+    return d.data.klines.map(x=>{ const a=x.split(","); return {t:a[0], open:+a[1], close:+a[2], high:+a[3], low:+a[4]}; });
+  });
+  return fetchWithTimeout(url,9000).then(parse).catch(()=> fetchWithTimeout(url,9000).then(parse).catch(()=>[]));
 }
 function fetchTencentPrice(code){
   code=normalizeCode(code);
@@ -4926,7 +4929,11 @@ function autoGridMonitor(){
         // 单根最多一笔
       }
       // 幂等合并：跳过今日已录入的同价同方向成交，仅增量新增（不删除历史成交）
-      if(g._testGrid){ g.trades = g.trades.filter(t=> !(t._auto && t.date===today)); } // 测试网格：今日自动成交按成交驱动序列干净重算（剔除上一版固定网格遗留）
+      if(g._testGrid){
+        const autoCnt = g.trades.filter(t=>t.date===today && (t.type==="买入"||t.type==="卖出")).length;
+        if(bars.length < autoCnt) return null;   // 退化保护：当日分时被截断/异常（根数少于已录数）→ 保留现状，避免把完整序列降成残缺
+        g.trades = g.trades.filter(t=> !(t._auto && t.date===today));  // 测试网格：今日自动成交按当前当日分时干净重算
+      }
       const exist=new Set(g.trades.filter(t=>t.date===today && (t.type==="买入"||t.type==="卖出"))
         .map(t=> t.type+"@"+r3(t.trigger)));
       const added=[];
