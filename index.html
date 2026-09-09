@@ -167,6 +167,8 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .ac-num b{color:var(--ink);font-weight:600}
 .ac-legend{display:flex;align-items:center;gap:16px;font-size:12px;color:var(--muted);flex-wrap:wrap}
 .ac-dot{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:middle}
+.ac-item.cash{background:#FBF8F1;border:1px solid #EFE4CC;border-radius:7px;padding:7px 9px;margin:0 -9px}
+.ac-item.cash .ac-bar{outline:1px dashed var(--warn);outline-offset:1px}
 /* 条件单诊断 · 每回合手续费占比 */
 .cd-fee{background:var(--band);border:1px solid var(--bandline);border-radius:3px;padding:10px 12px;margin:10px 0}
 .cd-fee-h{font-size:12px;font-weight:600;color:var(--warn);margin-bottom:7px}
@@ -4058,17 +4060,20 @@ function pfAssetsChartHTML(pf){
   if(freeCash>0) data.push({name:"未分配流动现金", mv:0, cash:freeCash, total:freeCash, isCash:true});
   const grand=data.reduce((a,x)=>a+x.total,0);
   if(grand<=0) return `<div class="empty">成员均为建仓阶段或未建仓，暂无资产可显示（持仓市值 + 现金 = 总资产）。</div>`;
-  const maxT=Math.max.apply(null, data.map(x=>x.total).concat([1]));
+  const FULL_W=200;          // 整条轨道 = 组合总资产（100%），条长即占组合比例
+  const MIN_W=3;             // 极小值保留可见细条，但不夸大（原 44px 下限会把 100 元画成 ~24%）
   const items=data.map(x=>{
-    const w=Math.max(44, Math.round(x.total/maxT*180));
+    const share=grand>0? x.total/grand : 0;
+    const w=Math.max(MIN_W, Math.round(share*FULL_W));
+    const pctTxt=pct(share,1);
     if(x.isCash){
-      return `<div class="ac-item">
+      return `<div class="ac-item cash">
       <div class="ac-top">
         <span class="ac-nm" style="font-size:13px;color:var(--muted)">${esc(x.name)}</span>
         <span class="ac-bar" style="width:${w}px"><i class="csh" style="width:100%"></i></span>
-        <span class="ac-val">¥${fmt(x.total,0)}</span>
+        <span class="ac-val">¥${fmt(x.total,0)} · ${pctTxt}</span>
       </div>
-      <div class="ac-num">流动现金（计划投入中未分配至任何标的）<b>¥${fmt(x.cash,0)}</b></div>
+      <div class="ac-num">流动现金（计划投入中未分配至任何标的）<b>¥${fmt(x.cash,0)}</b> · 占组合 <b>${pctTxt}</b></div>
     </div>`;
     }
     const mvp=x.total>0? x.mv/x.total*100 : 0;
@@ -4076,16 +4081,16 @@ function pfAssetsChartHTML(pf){
       <div class="ac-top">
         <span class="ac-nm" style="font-size:${fitFontSize(x.name,150,13)}px">${esc(x.name)}</span>
         <span class="ac-bar" style="width:${w}px"><i class="mv" style="width:${mvp}%"></i><i class="csh" style="width:${100-mvp}%"></i></span>
-        <span class="ac-val">¥${fmt(x.total,0)}</span>
+        <span class="ac-val">¥${fmt(x.total,0)} · ${pctTxt}</span>
       </div>
-      <div class="ac-num">持仓市值 <b>¥${fmt(x.mv,0)}</b> · 现有现金 <b>¥${fmt(x.cash,0)}</b></div>
+      <div class="ac-num">持仓市值 <b>¥${fmt(x.mv,0)}</b> · 现有现金 <b>¥${fmt(x.cash,0)}</b> · 占组合 <b>${pctTxt}</b></div>
     </div>`;
   }).join("");
   return `<div class="card"><div class="card-body">
     <div class="ac-compact">
-      <div class="ac-sum"><span class="ac-lbl">资产构成 · 持仓市值 + 现金${freeCash>0? "（含未分配流动现金 ¥"+fmt(freeCash,0)+"）":""}</span><span class="ac-grand">¥${fmt(grand,0)}</span></div>
+      <div class="ac-sum"><span class="ac-lbl">资产构成 · 各成员持仓市值 + 现金${freeCash>0? "（含未分配流动现金 ¥"+fmt(freeCash,0)+"）":""}</span><span class="ac-grand">¥${fmt(grand,0)}</span></div>
       <div class="ac-list">${items}</div>
-      <div class="ac-legend"><span><i class="ac-dot" style="background:var(--down)"></i>持仓市值</span><span><i class="ac-dot" style="background:var(--warn)"></i>现有现金</span></div>
+      <div class="ac-legend"><span><i class="ac-dot" style="background:var(--down)"></i>持仓市值</span><span><i class="ac-dot" style="background:var(--warn)"></i>现有现金</span><span style="color:var(--muted)">条长 = 占组合总资产比例</span></div>
     </div>
   </div></div>`;
 }
