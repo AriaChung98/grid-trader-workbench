@@ -52,9 +52,10 @@ h1{font-size:25px;font-weight:600;margin:5px 0 2px;letter-spacing:.01em;}
 .band-toggle{font-size:11px;letter-spacing:.02em;text-transform:none;font-weight:500;padding:3px 9px;border-radius:2px;border:1px solid var(--bandline);background:#fff;color:var(--warn);cursor:pointer;margin-left:auto}
 .band-toggle:hover{background:var(--band)}
 .band .ttl-sub{font-size:12px;letter-spacing:.02em;text-transform:none;color:var(--muted);font-weight:500}
-.band .row{display:grid;grid-template-columns:18px 1fr;gap:11px;align-items:start;font-size:14px;line-height:1.55}
+.band .row{display:grid;grid-template-columns:18px minmax(0,1fr);gap:11px;align-items:start;font-size:14px;line-height:1.55}
 .band .row svg{width:16px;height:16px;margin-top:2px}
 .band .row > div{color:var(--ink);min-width:0}
+.band .row > div:only-child{grid-column:1 / -1}
 .tag{display:inline-block;padding:2px 9px;border-radius:2px;font-size:12px;letter-spacing:.03em;white-space:nowrap}
 .tag.urgent{background:#FBEDEA;color:var(--up);border:1px solid #EAC9C2}
 .tag.info{background:transparent;border:1px solid var(--ink);color:var(--ink)}
@@ -4195,14 +4196,15 @@ function renderPortfolioEdit(pf){
   const on=(d.members||[]).filter(m=>m.on);
   /* 仅"运行中"网格(已配置条件单且未暂停/未停止)才需提醒暂停；建仓阶段/已停止无需 */
   const running=on.filter(m=>{ const g=getGrid(m.gridId); return g && isConfigured(g) && !isPaused(g) && !isStopped(g); });
+  const icon=`<svg viewBox="0 0 24 24" fill="none" stroke="#9A6B1F" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>`;
   let remind;
   if(on.length===0){
-    remind=`<div class="band" style="border-color:var(--bandline);background:var(--band);color:var(--ink)"><div class="row"><div>先在下方「已纳入成员」勾选标的、填写权重与计划资金，再保存组合（尚未改动底仓，无需暂停网格）。</div></div></div>`;
+    remind=`<div class="band" style="border-color:var(--bandline);background:var(--band);color:var(--ink)"><div class="row">${icon}<div>先在下方「已纳入成员」勾选标的、填写权重与计划资金，再保存组合（尚未改动底仓，无需暂停网格）。</div></div></div>`;
   } else if(running.length===0){
-    remind=`<div class="band" style="border-color:#C9E2D2;background:#F2F8F4;color:#2f6b4a"><div class="row"><div><b>已全部暂停 / 无运行中网格</b>：成员网格均已暂停或停止，可安全调整底仓与分配；完成后到各标的页点「恢复委托」继续运行。</div></div></div>`;
+    remind=`<div class="band" style="border-color:#C9E2D2;background:#F2F8F4;color:#2f6b4a"><div class="row">${icon}<div><b>已全部暂停 / 无运行中网格</b>：成员网格均已暂停或停止，可安全调整底仓与分配；完成后到各标的页点「恢复委托」继续运行。</div></div></div>`;
   } else {
     const names=running.map(m=>{ const g=getGrid(m.gridId); return g? g.meta.name : m.gridId; }).join("、");
-    remind=`<div class="band" style="border-color:#E2C08A;background:#FBF4E6;color:#6b4e16"><div class="row"><div><b>调整底仓前请先暂停网格：</b>以下 <b>${running.length}</b> 个成员网格仍在运行（${names}）。暂停仅停止下单、<b>不冻结收益与市值</b>；调整底仓完成后到对应标的页点「恢复委托」即可继续。已暂停 ${on.length-running.length} 个。</div></div></div>`;
+    remind=`<div class="band" style="border-color:#E2C08A;background:#FBF4E6;color:#6b4e16"><div class="row">${icon}<div><b>调整底仓前请先暂停网格：</b>以下 <b>${running.length}</b> 个成员网格仍在运行（${names}）。暂停仅停止下单、<b>不冻结收益与市值</b>；调整底仓完成后到对应标的页点「恢复委托」即可继续。已暂停 ${on.length-running.length} 个。</div></div></div>`;
   }
   return `
   <section class="section" style="margin-top:6px">
