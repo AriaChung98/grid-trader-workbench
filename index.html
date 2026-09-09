@@ -2991,6 +2991,8 @@ function editPortfolio(id){
     const sum=raw.reduce((a,b)=>a+Math.max(0,b),0)||1;
     state.pfDraft.members.forEach(m=>{ if(m.weight>1.5) m.weight=Math.max(1e-6, m.weight/sum); });
   }
+  /* 编辑已建组合 → 进入组合详情页的编辑模式（不再退回总览内联表单），由 renderPortfolioEdit 渲染并附「暂停网格」提醒 */
+  state.activePfId=id;
   render();
 }
 function cancelPortfolio(){
@@ -3145,7 +3147,10 @@ function render(){
   renderHeader();
   const v=$("view");
   if(state.creating){ v.innerHTML = renderNewGrid(); bindNewGrid(); return; }
-  if(state.activePfId){ const pf=getPf(state.activePfId); if(pf){ v.innerHTML = renderPortfolioDetail(pf); bindPortfolioDetail(pf); return; } state.activePfId=null; }
+  if(state.activePfId){ const pf=getPf(state.activePfId); if(pf){
+      /* 编辑模式：草稿存在且针对当前组合 → 渲染详情页内编辑视图（含暂停网格提醒） */
+      if(state.pfDraft && state.pfDraft.id===state.activePfId){ v.innerHTML = renderPortfolioEdit(pf); return; }
+      v.innerHTML = renderPortfolioDetail(pf); bindPortfolioDetail(pf); return; } state.activePfId=null; }
   if(state.activeId){ v.innerHTML = renderDetail(activeGrid()); bindDetail(activeGrid()); return; }
   v.innerHTML = renderOverview(); bindOverview();
 }
@@ -4019,10 +4024,9 @@ function openPf(id){
   state.activePfId=id; state.activeId=null; state.creating=null; state._pfFrom=null;
   save(); render();
 }
-/* 组合详情页顶部「编辑」：回到总览并打开内联编辑表单 */
+/* 组合详情页顶部「编辑」：进入详情页编辑模式（含分配金额编辑 + 暂停网格提醒） */
 function editPfNow(id){
   editPortfolio(id);
-  state.activePfId=null; state.activeId=null; state._pfFrom=null;
   render();
 }
 /* 组合详情页：整体回测摘要 + 成员清单（点击进入各成员交易） */
@@ -4149,6 +4153,29 @@ function renderPortfolioDetail(pf){
   <section class="section">
     <div class="lab"><span class="t">成员标的</span><span>点击行或「查看交易」进入该标的的交易详情</span></div>
     <div class="ov">${memberRows || `<div class="empty">该组合暂无有效成员。</div>`}</div>
+  </section>`;
+}
+function renderPortfolioEdit(pf){
+  const d=state.pfDraft; if(!d) return renderPortfolioDetail(pf);
+  const on=(d.members||[]).filter(m=>m.on);
+  /* 仅"运行中"网格(已配置条件单且未暂停/未停止)才需提醒暂停；建仓阶段/已停止无需 */
+  const running=on.filter(m=>{ const g=getGrid(m.gridId); return g && isConfigured(g) && !isPaused(g) && !isStopped(g); });
+  let remind;
+  if(on.length===0){
+    remind=`<div class="band" style="border-color:var(--bandline);background:var(--band);color:var(--ink)"><div class="row"><div>先在下方「已纳入成员」勾选标的、填写权重与计划资金，再保存组合（尚未改动底仓，无需暂停网格）。</div></div></div>`;
+  } else if(running.length===0){
+    remind=`<div class="band" style="border-color:#C9E2D2;background:#F2F8F4;color:#2f6b4a"><div class="row"><div><b>已全部暂停 / 无运行中网格</b>：成员网格均已暂停或停止，可安全调整底仓与分配；完成后到各标的页点「恢复委托」继续运行。</div></div></div>`;
+  } else {
+    const names=running.map(m=>{ const g=getGrid(m.gridId); return g? g.meta.name : m.gridId; }).join("、");
+    remind=`<div class="band" style="border-color:#E2C08A;background:#FBF4E6;color:#6b4e16"><div class="row"><div><b>调整底仓前请先暂停网格：</b>以下 <b>${running.length}</b> 个成员网格仍在运行（${names}）。暂停仅停止下单、<b>不冻结收益与市值</b>；调整底仓完成后到对应标的页点「恢复委托」即可继续。已暂停 ${on.length-running.length} 个。</div></div></div>`;
+  }
+  return `
+  <section class="section" style="margin-top:6px">
+    <div class="lab"><span class="t">编辑资产组合 · ${pf.name||"未命名"}</span><span>
+      <button class="btn sm primary" onclick="savePortfolio()">保存组合</button>
+      <button class="btn sm ghost" onclick="cancelPortfolio()">取消</button></span></div>
+    ${remind}
+    ${pfFormHTML(d)}
   </section>`;
 }
 function bindPortfolioDetail(){}
