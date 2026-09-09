@@ -3357,7 +3357,7 @@ function renderBandGlobal(sums){
     const detailRows = autoTradesAll.map(({g,t})=>`<div class="auto-rec-line"><span class="nm">「${g.meta.name}」</span> <span class="tp-${t.type==='买入'?'buy':'sell'}">${t.type}</span> ${fmt(t.qty,0)}股 @¥${fmt(t.trigger,3)}</div>`).join('');
     items.unshift(`<span class="tag ok">已自动录入</span> <span class="auto-rec-pop" tabindex="0" onclick="this.classList.toggle('open')">今日已自动录入 <b>${autoTradesAll.length}</b> 笔成交（条件单触发）<span class="auto-rec-tip"><div class="auto-rec-h">今日自动录入明细（${autoTradesAll.length} 笔）</div>${detailRows}</span></span>`);
   }
-  if(totalTrades>=30) items.push(`<span class="tag info">备份提醒</span> 已累计 ${totalTrades} 笔交易，建议导出 JSON 备份。`);
+  if(totalTrades>=30 && !ackGet("bak:global")) items.push(`<span class="tag info">备份提醒</span> 已累计 ${totalTrades} 笔交易，建议导出 JSON 备份。<button class="btn sm" style="margin-left:10px" onclick="ackBand('bak:global')">已备份</button>`);
   sums.forEach(({g,sm})=>{
     const c=g.cond.params, gl=gridLevels(c), cur=sm.cur;
     if(isStopped(g)){ items.push(`<span class="tag stopped">${g.meta.code} 已停止</span> 网格已于 ${g.stop.date} 停止，收益与天数已冻结。`); return; }
@@ -3367,7 +3367,8 @@ function renderBandGlobal(sums){
     const dirsTxt = trig.sides.length? trig.sides.map(s=> s==='buy'?'买入':'卖出').join(' + ') : '';
     if(todaysGrid.length>0){
       const dirTxt = dirsTxt? `（今日触发网格·${dirsTxt}）` : '';
-      items.push(`<span class="tag ok">${g.meta.code} 今日已处理</span> 今日已录入 ${todaysGrid.length} 笔成交${dirTxt}，无需重复录入。`);
+      const ackDone="done:"+g.id+":"+todayISO();
+      if(!ackGet(ackDone)) items.push(`<span class="tag ok">${g.meta.code} 今日已处理</span> 今日已录入 ${todaysGrid.length} 笔成交${dirTxt}，无需重复录入。<button class="btn sm" style="margin-left:10px" onclick="ackBand('${ackDone}')">确定</button>`);
     } else if(trig.triggered){
       const ptxt = trig.sides.includes('buy') ? `下个买点 ¥${fmt(trig.buyNext,3)}` : `下个卖点 ¥${fmt(trig.sellNext,3)}`;
       items.push(`<span class="tag urgent">${g.meta.code} 已触发网格·${dirsTxt}</span> 当前价 ¥${fmt(cur,3)} 已触及${ptxt}，请及时录入今日${trig.sides[0]==='buy'?'买入':'卖出'}成交。`);
@@ -4155,6 +4156,40 @@ function renderPortfolioDetail(pf){
     <div class="ov">${memberRows || `<div class="empty">该组合暂无有效成员。</div>`}</div>
   </section>`;
 }
+/* 紧凑版组合编辑表单（用于详情页内嵌编辑，不使用完整的 pfFormHTML） */
+function pfEditCompactHTML(d){
+  const T=Number(d.totalCapital)||0;
+  const on=(d.members||[]).filter(m=>m.on);
+  const wSum=on.reduce((a,m)=>a+Math.max(0,Number(m.weight)||0),0);
+  const memRows=on.map(m=>{
+    const g=getGrid(m.gridId); if(!g) return "";
+    const wN=wSum>0? Math.max(0,Number(m.weight)||0)/wSum : 0;
+    const alloc=T*wN;
+    const need=pfMemberNeed(m);
+    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
+      <span style="min-width:0;flex:1 1 0;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g.meta.name} <span style="font-weight:400;color:var(--muted);font-size:11.5px">${g.meta.code}</span></span>
+      <label style="font-size:11.5px;color:var(--muted);white-space:nowrap">计划资金</label>
+      <input type="number" data-k="plan" data-id="${g.id}" value="${fmt(m.plan||need,0)}" oninput="onPfPlan(event)" style="width:90px;min-height:30px;padding:2px 6px;font-size:12.5px">
+      <label style="font-size:11.5px;color:var(--muted);white-space:nowrap">权重%</label>
+      <input type="number" step="0.5" min="0" value="${round((Number(m.weight)||0)*100,1)}" data-k="w" data-id="${g.id}" oninput="onPfWeight(event)" style="width:70px;min-height:30px;padding:2px 6px;font-size:12.5px">
+      <span style="font-size:12px;color:var(--muted);white-space:nowrap;min-width:70px;text-align:right">¥${fmt(alloc,0)}</span>
+    </div>`;
+  }).join("");
+  const ra=pfRealAssets(on);
+  const freeCash=Math.max(0, T - (ra.invest>0? ra.invest:0));
+  return `<div style="margin-top:10px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+      <label style="font-size:12px;color:var(--muted);white-space:nowrap">组合名称</label>
+      <input type="text" data-k="name" value="${d.name||""}" oninput="onPfInput(event)" placeholder="如：核心ETF组合" style="flex:1;min-width:140px;min-height:32px;padding:2px 8px;font-size:13px">
+      <label style="font-size:12px;color:var(--muted);white-space:nowrap">计划投入（¥）</label>
+      <input type="number" step="1000" min="0" data-k="totalCapital" value="${T||""}" oninput="onPfInput(event)" placeholder="如：80000" style="width:110px;min-height:32px;padding:2px 8px;font-size:13px" title="计划投入=预算上限">
+    </div>
+    <div style="font-size:12px;font-weight:600;margin-bottom:6px">已纳入成员（${on.length} 个）</div>
+    ${memRows||`<div style="color:var(--muted);font-size:12px;padding:8px 0">暂无已纳入成员</div>`}
+    ${freeCash>0 ? `<div style="margin-top:8px;font-size:11.5px;color:#8A6A2F;background:#FBF8F1;padding:6px 10px;border-radius:6px">未分配流动现金：<b>¥${fmt(freeCash,0)}</b>（计划投入 ¥${fmt(T,0)} − 已投入 ¥${fmt(ra.invest,0)}）</div>` : ""}
+  </div>`;
+}
+
 function renderPortfolioEdit(pf){
   const d=state.pfDraft; if(!d) return renderPortfolioDetail(pf);
   const on=(d.members||[]).filter(m=>m.on);
@@ -4175,7 +4210,7 @@ function renderPortfolioEdit(pf){
       <button class="btn sm primary" onclick="savePortfolio()">保存组合</button>
       <button class="btn sm ghost" onclick="cancelPortfolio()">取消</button></span></div>
     ${remind}
-    ${pfFormHTML(d)}
+    ${pfEditCompactHTML(d)}
   </section>`;
 }
 function bindPortfolioDetail(){}
