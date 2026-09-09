@@ -3130,13 +3130,14 @@ function renderOverview(){
     const holding = last? last.I : 0;
     const marketVal = holding * sm.cur;
     const cfg=isConfigured(g);
+    const todays = g.trades.filter(t=>t.date===todayISO()).length;   // 今日发生交易（含建仓）
     /* 已被纳入组合的网格：勾选固定为未勾选且禁用（收益由组合行计入口径控制，避免重复） */
     const selCell = inPf
       ? `<input type="checkbox" disabled title="已纳入资产组合，收益由组合行计入口径控制">`
       : `<input type="checkbox" ${g._include!==false?'checked':''} onchange="toggleInclude('${g.id}')" title="勾选后计入收益总览">`;
     return `<div class="ovrow${inPf?' hidden':''}">
       <div class="sel">${selCell}</div>
-      <div class="sym">${symNameHTML(g.meta.name,15)}${inPf?` <span class="tag lock" title="已被资产组合纳入，收益由组合行计入口径控制">已纳入组合</span>`:""}${isStopped(g)?` <span class="tag stopped">已停止</span>`:""}${isPaused(g)?` <span class="tag warn">已暂停</span>`:""}${!cfg?` <span class="tag info">建仓阶段</span>`:""}<small>${g.meta.code} · ${g.trades.length} 笔交易${isStopped(g)?` · 冻结于 ${g.stop.date}`:""}${isPaused(g)?` · 暂停中（调底仓）`:""}</small></div>
+      <div class="sym">${symNameHTML(g.meta.name,15)}${inPf?` <span class="tag lock" title="已被资产组合纳入，收益由组合行计入口径控制">已纳入组合</span>`:""}${isStopped(g)?` <span class="tag stopped">已停止</span>`:""}${isPaused(g)?` <span class="tag warn">已暂停</span>`:""}${!cfg?` <span class="tag info">建仓阶段</span>`:""}<small>${g.meta.code} · 共 ${g.trades.length} 笔 · 今日发生交易 <b>${todays}</b> 笔${isStopped(g)?` · 冻结于 ${g.stop.date}`:""}${isPaused(g)?` · 暂停中（调底仓）`:""}</small></div>
       <div class="cond">${cfg
         ? `最新基准 <b>¥${fmt(base,3)}</b> · 间距 <b>${pct(c.spacingPct,2)}</b> · 上<b>${c.upGrids}</b>/下<b>${c.downGrids}</b> 格<br>
         每笔 <b>${fmt(c.qtyPerTrade,0)}</b> · 资金 <b>¥${fmt(c.initCapital,0)}</b> · 区间 ¥${fmt(gl.lower,3)}~${fmt(gl.upper,3)}<br>
@@ -3175,6 +3176,7 @@ function renderOverview(){
     const ready=pfCondAllConfigured(pf);
     const prof= pfProf(x), asst= pfAsst(x), ret= ready? (bt&&bt.actInvest>0? bt.actRet:0) : (simOk? bt.ret : (bt&&bt.actInvest>0? bt.actRet:0));
     const members=pfMembers(pf);
+    const pfTodays = members.reduce((a,m)=> a + (m.g.trades||[]).filter(t=>t.date===todayISO()).length, 0);   // 组合今日发生交易（各成员合计，含建仓）
     const memTxt=members.slice(0,3).map(m=>`${m.g.meta.name} ${pct(pfNormWeights(members)[members.indexOf(m)],1)}`).join("、");
     const sub = (a,b)=>`<div style="font-size:11px;color:var(--muted);font-weight:400">${a}</div><div style="font-size:11px;color:var(--muted);font-weight:400">${b}</div>`;
     const profLbl= ready? "实际利润" : "组合利润 · 回测";
@@ -3182,7 +3184,7 @@ function renderOverview(){
     const modeTag= ready? `<span class="mlabel ok">已建仓·实际</span>` : `<span class="mlabel info">条件单未全建·回测</span>`;
     return `<div class="ovrow">
       <div class="sel"><input type="checkbox" ${pf._include!==false?'checked':''} onchange="togglePfInclude('${pf.id}')" title="勾选后计入收益总览"></div>
-      <div class="sym">${pf.name} <span class="mlabel lk">组合 · ${n} 标的</span> ${modeTag}<small>${pf.createdAt||""} · 计划投入 ¥${fmt(T,0)}</small></div>
+      <div class="sym">${pf.name} <span class="mlabel lk">组合 · ${n} 标的</span> ${modeTag}<small>${pf.createdAt||""} · 计划投入 ¥${fmt(T,0)} · 今日发生交易 <b>${pfTodays}</b> 笔</small></div>
       <div class="cond">${members.length? `${memTxt}${members.length>3?` 等 ${members.length} 个`:""} · `:""}计划投入 <b>¥${fmt(T,0)}</b></div>
       <div class="profit ${signClass(prof)}">${fmt(prof,2)}${sub(profLbl,"收益率 "+pct(ret,2))}</div>
       <div class="assets ${signClass(asst-T)}" title="${ready? '实时总资产（真实口径：各成员已建仓成交的市值+现金，详见组合详情「资产构成」）¥'+fmt(asst,0) : '回测期末资产(模拟)=按计划投入分摊、样本内重跑网格的期末估值；真实资产见组合详情「实时总资产 · 真实」¥'+(bt?fmt(bt.actAssets,0):'—')}">${fmt(asst,2)}${sub(asstLbl,"计划投入 ¥"+fmt(T,0))}</div>
