@@ -549,6 +549,10 @@ tbody tr:hover{background:#FBFAF7}
 const LS = "wb_gridtrader_";
 const KEY_STATE = LS+"state";
 const KEY_CLOUD = LS+"cloud";
+// 本地测试网格（仅存本机、不上云，避免污染云端真实数据）：用于验证"实盘连续触发自动录入"
+const KEY_TESTGRID = LS+"testgrid";
+const KEY_TESTDISMISS = LS+"testdismiss";
+const TEST_GRID_ID = "g_test_trigger_588000";
 // 默认云端配置：内置本项目 Supabase 凭证，首次打开即自动启用云端同步；用户可在面板关闭或改填其他项目
 const DEFAULT_CLOUD = {
   url: "https://hlhsoyuzffndxahwfady.supabase.co",
@@ -641,6 +645,50 @@ function makeGrid({meta, cond, trades, pricePath, market, _sample}){
   };
 }
 
+/* ============ 本地测试网格（验证"实盘连续触发自动录入"） ============ */
+/* 仅存本机 localStorage、绝不上云：基准=昨天(09-08)收盘1.681，间距0.5%，每笔800，初始资金3万，半仓约9000股；
+   昨天已建仓，今天上午(09-09)实盘中 588000 在 1.67~1.699 区间震荡 → 固定网格逻辑应自动录入 1买+2卖 共3笔。 */
+function buildTestGrid(){
+  const base=1.681;
+  const params={
+    basePrice:base, spacingPct:0.005, upGrids:11, downGrids:11, qtyPerTrade:800,
+    feeRate:0.0001, minFee:5, initCapital:30000, targetBaseCost:9000,
+    startPrice:base, startDate:"2026-09-08", currentPrice:base, high52:null, high60:null,
+    modifyDate:"2026-09-08"
+  };
+  return {
+    id: TEST_GRID_ID,
+    meta:{ code:"sh588000", name:"科创50ETF·连续触发测试" },
+    createdAt: todayISO(),
+    cond:{ locked:true, configured:true, params: clone(params),
+      history:[{ params: clone(params), setAt:"2026-09-08", note:"测试条件单：基准=09-08收盘，间距0.5%，用于验证实盘连续触发自动录入" }] },
+    trades:[ { date:"2026-09-08", type:"建仓", trigger:base, qty:9000, close:base } ],
+    pricePath:[], market:null, stop:null, paused:null,
+    _sample:false, _noCloudSync:true, _testGrid:true, _autoRec:{}
+  };
+}
+/* 打开工作台时确保测试网格存在（本地，云无关）：若已删除则不再添加；否则从本地存档恢复或新建 */
+function ensureTestGrid(){
+  try{
+    if(localStorage.getItem(KEY_TESTDISMISS)) return;
+    if(state.grids.some(g=>g.id===TEST_GRID_ID)) return;
+    let tg=null;
+    try{ const r=localStorage.getItem(KEY_TESTGRID); if(r) tg=JSON.parse(r); }catch(e){}
+    if(!tg || tg.id!==TEST_GRID_ID) tg=buildTestGrid();
+    try{ localStorage.setItem(KEY_TESTGRID, JSON.stringify(tg)); }catch(e){}
+    state.grids.push(tg);
+    render();
+    try{ autoGridMonitor(); }catch(e){ console.warn("测试网格自动录入初始化失败：",e); }
+  }catch(e){ console.warn("ensureTestGrid 失败：",e); }
+}
+/* 将测试网格（含已自动录入的成交与按日去重标记）持久化到本机，确保跨刷新不重复录入 */
+function persistTestGrid(){
+  try{
+    const tg=state.grids.find(g=>g.id===TEST_GRID_ID);
+    if(tg) localStorage.setItem(KEY_TESTGRID, JSON.stringify(tg));
+  }catch(e){}
+}
+
 /* ============ 存储 + 迁移 ============ */
 function load(){
   try{
@@ -669,6 +717,7 @@ function save(){
   try{ state._savedAt = new Date().toISOString(); localStorage.setItem(KEY_STATE, JSON.stringify(state)); }
   catch(e){ alert("保存失败："+e.message); return; }
   cloudPush(true);    // 异步同步到云端，成功/失败均提示
+  persistTestGrid();  // 测试网格（含自动录入成交）持久化到本机，避免跨刷新重复录入
   maybeSnapshot();    // 满足间隔则自动生成当日云端快照（30天滚动）
 }
 
@@ -689,7 +738,11 @@ function cloudPush(showToast){
   const c=cloudCfg(); if(!c) return Promise.resolve(false);
   if(state._pristine){ console.warn("跳过云端上传：当前为默认演示数据，避免覆盖云端真实数据"); return Promise.resolve(false); }
   const now = state._savedAt || new Date().toISOString();
-  const body=JSON.stringify([{ id:"app", data:state, updated_at:now }]);
+  // 本地测试网格（_noCloudSync）仅存本机，过滤掉再上云，绝不污染云端真实数据
+  const pushState = (state.grids && state.grids.some(g=>g._noCloudSync))
+    ? Object.assign({}, state, { grids: state.grids.filter(g=>!g._noCloudSync) })
+    : state;
+  const body=JSON.stringify([{ id:"app", data:pushState, updated_at:now }]);
   return fetch(`${c.url}/rest/v1/gridtrader?on_conflict=id`, {
     method:"POST", headers:Object.assign(cloudHeaders(),{ "Prefer":"resolution=merge-duplicates" }), body
   }).then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status);
@@ -4203,9 +4256,11 @@ function onDraftInput(id,e){
   else if(k==="startPrice"){ g._draft._autoStart=false; v=parseFloat(v); if(!isNaN(v)) g._draft[k]=v; }
   else if(k==="targetBaseCost"){ g._draft._autoBase=false; v=parseFloat(v); if(!isNaN(v)) g._draft[k]=v; }
   else if(k==="posMinQty"||k==="posMaxQty"){ g._draft[k==="posMinQty"?"_autoPosMin":"_autoPosMax"]=false; v=parseFloat(v); if(!isNaN(v)) g._draft[k]=Math.max(0, Math.round(v)); }
+  else if(k==="upGrids"||k==="downGrids"){ g._draft._autoGrids=false; v=parseFloat(v); if(!isNaN(v)) g._draft[k]=Math.max(0, Math.round(v)); }
   else if(COND_FIELDS.find(f=>f.k===k && f.p)){ v=parseFloat(v)/100; if(!isNaN(v)) g._draft[k]=v; }
   else { v=parseFloat(v); if(!isNaN(v)) g._draft[k]=v; }
-  if(k==="qtyPerTrade" || (k==="initCapital" && g._draft._autoGrids)) onQtyChanged(g._draft);
+  /* 间距变化（初始资金已确认且参数齐全时）重算上下网格，随后 recalcDerived 自动重算持仓上下限 */
+  if(k==="qtyPerTrade" || k==="spacingPct" || (k==="initCapital" && g._draft._autoGrids)) onQtyChanged(g._draft);
   recalcDerived(g._draft, (g.market? g.market.kline : g.pricePath));
   syncAutoFields(g._draft);
   syncPosInputs(g._draft);
@@ -4219,9 +4274,11 @@ function onDraftInputNew(e){
   else if(k==="startPrice"){ cr.draftCond._autoStart=false; v=parseFloat(v); if(!isNaN(v)) cr.draftCond[k]=v; }
   else if(k==="targetBaseCost"){ cr.draftCond._autoBase=false; v=parseFloat(v); if(!isNaN(v)) cr.draftCond[k]=v; }
   else if(k==="posMinQty"||k==="posMaxQty"){ cr.draftCond[k==="posMinQty"?"_autoPosMin":"_autoPosMax"]=false; v=parseFloat(v); if(!isNaN(v)) cr.draftCond[k]=Math.max(0, Math.round(v)); }
+  else if(k==="upGrids"||k==="downGrids"){ cr.draftCond._autoGrids=false; v=parseFloat(v); if(!isNaN(v)) cr.draftCond[k]=Math.max(0, Math.round(v)); }
   else if(COND_FIELDS.find(f=>f.k===k && f.p)){ v=parseFloat(v)/100; if(!isNaN(v)) cr.draftCond[k]=v; }
   else { v=parseFloat(v); if(!isNaN(v)) cr.draftCond[k]=v; }
-  if(k==="qtyPerTrade" || (k==="initCapital" && cr.draftCond._autoGrids)) onQtyChanged(cr.draftCond);
+  /* 间距变化（初始资金已确认且参数齐全时）重算上下网格，随后 recalcDerived 自动重算持仓上下限 */
+  if(k==="qtyPerTrade" || k==="spacingPct" || (k==="initCapital" && cr.draftCond._autoGrids)) onQtyChanged(cr.draftCond);
   recalcDerived(cr.draftCond, cr.market? cr.market.kline : null);
   syncAutoFields(cr.draftCond);
   syncPosInputs(cr.draftCond);
@@ -4491,6 +4548,7 @@ function delGrid(id){
   const inPfs=pfList().filter(p=>(p.members||[]).some(m=>m.gridId===id));
   const pfNote = inPfs.length? `<br><span style="color:#8A6A2F">该标的已在 ${inPfs.length} 个资产组合中——删除后会自动从这些组合中移除（组合本身保留）。</span>` : "";
   confirmModal("删除网格","将删除「"+esc(g.meta.name)+"（"+esc(g.meta.code)+"）」及其全部交易、条件单历史与行情。此操作不可逆！"+pfNote,()=>{
+    if(id===TEST_GRID_ID){ try{ localStorage.setItem(KEY_TESTDISMISS,"1"); localStorage.removeItem(KEY_TESTGRID); }catch(e){} } // 删除测试网格后不再自动添加
     state.grids=state.grids.filter(x=>x.id!==id);
     /* 从所有已保存组合与草稿中摘除该成员（组合本身保留） */
     state.portfolios.forEach(p=>{ p.members=(p.members||[]).filter(m=>m.gridId!==id); });
@@ -4618,7 +4676,16 @@ function fetchMarketTX(code){
 }
 /* 行情获取：云端代理优先（绕开本机网络屏蔽）；代理失败时给出明确提示，而非静默回退到被屏蔽的腾讯源 */
 function fetchMarket(code){
-  if(cloudCfg()) return fetchMarketProxy(code).catch(e=> Promise.reject(new Error("云端行情代理连接失败："+(e&&e.message||e)+"（可能你的网络无法访问 supabase.co）")));
+  if(cloudCfg()){
+    return fetchMarketProxy(code)
+      .then(m=>{
+        // 代理当日数据新鲜（最后一根=今天）→ 直接用；否则回退东方财富/腾讯直连取当日行情，
+        // 保证自动录入基于最新实盘（代理偶发滞后一天时仍能正确触发）
+        if(m && m.kline && m.kline.length && m.kline[m.kline.length-1].date===todayISO()) return m;
+        return fetchMarketEM(code).catch(()=> m || Promise.reject(new Error("行情获取失败")));
+      })
+      .catch(e=> fetchMarketEM(code).catch(()=> Promise.reject(new Error("行情获取失败："+(e&&e.message||e)))));
+  }
   return fetchMarketEM(code).catch(err=> fetchMarketTX(code));
 }
 function refreshMarket(id, silent){
@@ -4823,21 +4890,48 @@ function autoGridMonitor(){
       const cur=m.price;
       g.cond.params.currentPrice = cur;             // 静默更新现价（仅触发成交时才落盘）
       const sp=g.cond.params.spacingPct;
-      if(!(sp>0)) return null;
+      const base0=g.cond.params.basePrice;
+      if(!(sp>0) || !(base0>0)) return null;
       const qty = Math.max(100, Math.round((g.cond.params.qtyPerTrade||0)/100)*100);  // 整手（100股倍数）
+      const upN=g.cond.params.upGrids||0, downN=g.cond.params.downGrids||0;
+      if(!(upN>0||downN>0)) return null;
+      // 当日 high/low（与 gridTriggerStatus 同口径：仅当最后一根 K 为今日才用其高低，避免陈旧数据误判）
+      const kline=m.kline;
+      let dayHigh=cur, dayLow=cur;
+      if(kline && kline.length){
+        const last=kline[kline.length-1];
+        if(last.date===today){
+          const hi = last.high!=null? last.high : last.close;
+          const lo = last.low !=null? last.low  : last.close;
+          dayHigh=Math.max(cur, hi); dayLow=Math.min(cur, lo);
+        }
+      }
+      /* 固定网格线（相对初始基准价 base0）逐日判定：每个 (方向,价位) 当天最多录一次。
+         这样既能抓「盘中穿越、收盘回归」的 intraday 触发（用当日 high/low 全幅），
+         又杜绝旧逻辑"累积高低 + 成交驱动基准漂移"在极小间距/高波动下无限刷单的 bug。 */
+      g._autoRec = { [today]: (g._autoRec && g._autoRec[today]) || [] };
+      const recSet = g._autoRec[today];
       const added=[];
-      let guard=0;
-      while(guard++ < 12){                          // 单次巡检最多补录 12 笔，防极端
-        const trig = gridTriggerStatus(g, cur);     // 基准价=成交驱动（上一笔网格成交价）
-        if(!trig.triggered) break;
-        const side = trig.sides[0];                 // 该方向：'buy' / 'sell'
-        const lvl  = side==='buy' ? trig.buyNext : trig.sellNext;
-        // 防重复：今日已录入同一触发价（同一触发点）则跳过，避免反复录入
-        const dup = g.trades.some(t=> t.date===today && (t.type==='买入'||t.type==='卖出') && Math.abs(t.trigger-lvl)<0.0005 );
-        if(dup) break;
-        g.trades.push({date:today, type: side==='buy'?'买入':'卖出', trigger:round(lvl,3), qty, close:round(cur,3), _auto:true});
-        added.push(side==='buy'?'买入':'卖出');
-        // 录入后基准价移动，下一轮循环基于新基准价继续判断（成交驱动型连续监测）
+      const EPS=1e-9;
+      // 买入线 base0*(1-sp)^k（k=1..下格数）：当日最低 <= 该线即视为下穿触发
+      for(let k=1;k<=downN;k++){
+        const lvl = base0*Math.pow(1-sp,k);
+        if(lvl < dayLow - EPS) break;              // 该线及更低的线当日均未触及
+        const key="buy@"+Math.round(lvl*1000)/1000;
+        if(recSet.indexOf(key)>=0) continue;
+        recSet.push(key);
+        g.trades.push({date:today, type:"买入", trigger:round(lvl,3), qty, close:round(cur,3), _auto:true});
+        added.push("买入");
+      }
+      // 卖出线 base0*(1+sp)^k（k=1..上格数）：当日最高 >= 该线即视为上穿触发
+      for(let k=1;k<=upN;k++){
+        const lvl = base0*Math.pow(1+sp,k);
+        if(lvl > dayHigh + EPS) break;             // 该线及更高的线当日均未触及
+        const key="sell@"+Math.round(lvl*1000)/1000;
+        if(recSet.indexOf(key)>=0) continue;
+        recSet.push(key);
+        g.trades.push({date:today, type:"卖出", trigger:round(lvl,3), qty, close:round(cur,3), _auto:true});
+        added.push("卖出");
       }
       if(added.length){ g._sample=false; return {g, added}; }
       return null;
@@ -4861,8 +4955,9 @@ render();
 try{ if(!localStorage.getItem(KEY_CLOUD)){ setCloudCfg(DEFAULT_CLOUD); } }catch(e){}
 // 打开时先从云端拉取最新数据（若已启用云端同步）；仅拉取、不回推，避免用空白/默认本地状态覆盖云端
 if(cloudCfg()){
-  cloudPull();
-  maybeSnapshot();   // 打开即检查：距上次快照 ≥3 天则自动生成当日云端快照（保留 30 天）
+  cloudPull().finally(()=>{ try{ ensureTestGrid(); }catch(e){} maybeSnapshot(); });
+} else {
+  ensureTestGrid();
 }
 // 每次打开工作台，自动先刷新一波行情（仅取各标的现价，轻量；离线或失败时沿用上次价格）
 if(state.grids.length>0){
