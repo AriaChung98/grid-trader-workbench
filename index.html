@@ -972,6 +972,32 @@ function latestBasePrice(g){
   return last ? last.trigger : g.cond.params.basePrice;
 }
 
+/* 固定网格线（锚定初始基准价 base0）计算"下次买入/卖出触发价"：
+   - 下次买入 = 现价下方最近的买入线（最高且 < 现价），跳过今日已触发线
+   - 下次卖出 = 现价上方最近的卖出线（最低且 > 现价），跳过今日已触发线
+   保证 买入触发价 < 现价 < 卖出触发价（现价位于网格区间内时）。
+   区别于 latestBasePrice（成交驱动，用于回测锚点）；此处用固定网格线，与自动录入引擎(autoGridMonitor)同口径。 */
+function nextTriggerLines(c, trades, cur){
+  const base=c.basePrice;
+  const sp=c.spacingPct;
+  const downN=c.downGrids||0, upN=c.upGrids||0;
+  const EPS=1e-9;
+  const r3=v=>Math.round(v*1000)/1000;
+  const today=todayISO();
+  const firedBuy=new Set((trades||[]).filter(t=>t.date===today && t.type==="买入").map(t=>r3(t.trigger)));
+  const firedSell=new Set((trades||[]).filter(t=>t.date===today && t.type==="卖出").map(t=>r3(t.trigger)));
+  const near=(set,v)=>{ for(const f of set) if(Math.abs(f-v)<0.0015) return true; return false; };  // 容差匹配，避免取整差 0.001 把已成交线当"下一条"
+  const buyLines=[];
+  for(let k=1;k<=downN;k++){ const lv=r3(base*Math.pow(1-sp,k)); if(lv>=base-EPS) break; buyLines.push(lv); }
+  const sellLines=[];
+  for(let k=1;k<=upN;k++){ const lv=r3(base*Math.pow(1+sp,k)); if(lv<=base+EPS) break; sellLines.push(lv); }
+  let buyNext=null;
+  for(let i=0;i<buyLines.length;i++){ const lv=buyLines[i]; if(near(firedBuy,lv)) continue; if(lv < cur-EPS){ buyNext=lv; break; } }
+  let sellNext=null;
+  for(let i=0;i<sellLines.length;i++){ const lv=sellLines[i]; if(near(firedSell,lv)) continue; if(lv > cur+EPS){ sellNext=lv; break; } }
+  return {base, buyNext, sellNext};
+}
+
 /* ============ 停止网格（冻结收益/市值/天数） ============ */
 function isStopped(g){ return !!(g.stop && g.stop.date); }
 /* ============ 暂停网格（临时不提交买卖委托，用于调整底仓；不冻结收益，可随时恢复） ============ */
@@ -1010,22 +1036,23 @@ function frozenCur(g){
   return sc!=null ? sc : g.cond.params.currentPrice;
 }
 
-/* 条件单下侧：按最新基准价展示下一次买卖触发价 */
+/* 条件单下侧：按固定网格线（初始基准价）展示下一次买卖触发价 */
 function renderNextTrigger(g){
   const p=g.cond.params;
-  const base=latestBasePrice(g);
-  const buyNext=base*(1-p.spacingPct);
-  const sellNext=base*(1+p.spacingPct);
+  const cur=p.currentPrice||0;
+  const {base,buyNext,sellNext}=nextTriggerLines(g.cond.params, g.trades, cur);
   const gridT=g.trades.filter(t=>t.type==="买入"||t.type==="卖出").sort((a,b)=>a.date<b.date?1:-1);
   const last=gridT[0];
-  const src = last ? (`上一笔网格成交：${last.date} ${last.type} @¥${fmt(last.trigger,3)}`) : "尚无网格成交，以下方初始基准价 ¥"+fmt(g.cond.params.basePrice,3)+" 为参照";
+  const src = last ? (`上一笔网格成交：${last.date} ${last.type} @¥${fmt(last.trigger,3)}`) : "尚无网格成交，以初始基准价 ¥"+fmt(g.cond.params.basePrice,3)+" 为参照";
+  const bTxt = buyNext!=null? ("¥"+fmt(buyNext,3)) : "—（现价已低于全部买入线）";
+  const sTxt = sellNext!=null? ("¥"+fmt(sellNext,3)) : "—（现价已高于全部卖出线）";
   return `<div class="pline" style="margin-top:14px;background:#F7F5EF">
-    <div class="it"><div class="k">最新基准价（成交驱动）</div><div class="val">¥${fmt(base,3)}</div></div>
+    <div class="it"><div class="k">网格基准价（初始）</div><div class="val">¥${fmt(base,3)}</div></div>
     <div class="it"><div class="k">标的现价（实时）</div><div class="val ${signClass((p.currentPrice||0)-base)}">¥${fmt(p.currentPrice,3)}</div></div>
-    <div class="it"><div class="k">下次买入触发价 ↓</div><div class="val down">¥${fmt(buyNext,3)}</div></div>
-    <div class="it"><div class="k">下次卖出触发价 ↑</div><div class="val up">¥${fmt(sellNext,3)}</div></div>
+    <div class="it"><div class="k">下次买入触发价 ↓</div><div class="val down">${bTxt}</div></div>
+    <div class="it"><div class="k">下次卖出触发价 ↑</div><div class="val up">${sTxt}</div></div>
   </div>
-  <div class="hint">${src}。当价格跌至 ¥${fmt(buyNext,3)} 触发<b style="color:var(--down)">买入（网格）</b>，涨至 ¥${fmt(sellNext,3)} 触发<b style="color:var(--up)">卖出（网格）</b>，间距 ${pct(p.spacingPct,2)}。</div>`;
+  <div class="hint">${src}。价格跌至 ${bTxt} 触发<b style="color:var(--down)">买入（网格）</b>，涨至 ${sTxt} 触发<b style="color:var(--up)">卖出（网格）</b>，间距 ${pct(p.spacingPct,2)}。买入线均低于现价、卖出线均高于现价。</div>`;
 }
 
 /* 今日（最近交易日）是否触发网格买卖：以最新基准价为参照，检测最近一根K是否穿越任一网格触发线 */
@@ -1055,9 +1082,7 @@ function todayTriggered(g){
    否则陈旧 K 线（最后一根非今日）的高低会误判今日触发方向（如该买却显示卖点）。 */
 function gridTriggerStatus(g, cur){
   const c=g.cond.params;
-  const base=latestBasePrice(g);
-  const buyNext=base*(1-c.spacingPct);
-  const sellNext=base*(1+c.spacingPct);
+  const {base,buyNext,sellNext}=nextTriggerLines(c, g.trades, cur);
   const kline=(g.market? g.market.kline : g.pricePath);
   let dayHigh=cur, dayLow=cur;
   if(kline && kline.length){
@@ -1069,8 +1094,8 @@ function gridTriggerStatus(g, cur){
     }
   }
   const sides=[];
-  if(dayLow<=buyNext) sides.push('buy');
-  if(dayHigh>=sellNext) sides.push('sell');
+  for(let k=1;k<=(c.downGrids||0);k++){ const lv=base*Math.pow(1-c.spacingPct,k); if(lv>=base) break; if(dayLow<=lv+1e-9){ sides.push('buy'); break; } }
+  for(let k=1;k<=(c.upGrids||0);k++){ const lv=base*Math.pow(1+c.spacingPct,k); if(lv<=base) break; if(dayHigh>=lv-1e-9){ sides.push('sell'); break; } }
   return {triggered:sides.length>0, sides, side:sides[0]||null, buyNext, sellNext, base, dayHigh, dayLow};
 }
 
@@ -3763,9 +3788,7 @@ function renderBandGrid(g, sm, posHold){
       <span style="display:inline-flex;margin-top:8px"><button class="btn sm resume" onclick="resumePause('${g.id}')">恢复委托</button></span></div></div>`;
   }
   // 下个买/卖点以「成交驱动型最新基准价」为参照（= 上一笔网格成交价；无则取初始基准价），与条件单下侧一致
-  const base=latestBasePrice(g);
-  const buyNext=base*(1-c.spacingPct);
-  const sellNext=base*(1+c.spacingPct);
+  const {base,buyNext,sellNext}=nextTriggerLines(c, g.trades, cur);
   const trig=gridTriggerStatus(g,cur);   // 实时价（含当日 high/low 全部时点）对比下个买卖触发点
   const items=[];
   if(g.trades.length>=30) items.push(`<span class="tag info">备份提醒</span> 该网格已积累 ${g.trades.length} 笔交易，建议导出 JSON 备份。`);
@@ -3803,17 +3826,9 @@ function renderKChart(kline, cond, trades){
   const hasOHLC = kline[0].open!=null && kline[0].open!==undefined;
   const gl = cond? gridLevels(cond) : null;
   const curPrice = cond? cond.currentPrice : null;
-  // 下次触发（成交驱动型最新基准价 = 最近一笔网格成交价，无则初始基准价）
-  let buyNext=null, sellNext=null, latestBase=null;
-  if(cond){
-    latestBase = cond.basePrice;
-    if(trades&&trades.length){
-      const gridT=trades.filter(t=>t.type==="买入"||t.type==="卖出").sort((a,b)=>a.date<b.date?1:-1);
-      if(gridT[0]) latestBase=gridT[0].trigger;
-    }
-    buyNext=latestBase*(1-cond.spacingPct);
-    sellNext=latestBase*(1+cond.spacingPct);
-  }
+  // 下次触发：固定网格线（锚定初始基准价），取现价下方最近买入线 / 上方最近卖出线
+  let buyNext=null, sellNext=null;
+  if(cond){ const r=nextTriggerLines(cond, trades, curPrice); buyNext=r.buyNext; sellNext=r.sellNext; }
   const W = Math.max(340, kline.length*16+54), H=300, padL=10, padR=54, padT=16, padB=24;
   let all=[...kline.map(x=>x.high!=null?x.high:x.close), ...kline.map(x=>x.low!=null?x.low:x.close)];
   if(curPrice) all.push(curPrice);
