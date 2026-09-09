@@ -178,6 +178,22 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .hold-ratio .hr-legend b{color:var(--ink);font-variant-numeric:tabular-nums}
 .hold-ratio .hr-dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle}
 .hold-ratio .hr-pct{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+/* 持仓占比卡内 · 穿轨风险可视化 */
+.hold-ratio .rr{margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)}
+.hold-ratio .rr-ttl{font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px}
+.hold-ratio .rr-sub{font-weight:400;color:var(--muted);font-size:11px;margin-left:7px}
+.hold-ratio .rr-track{position:relative;height:16px;border-radius:8px;background:var(--line);margin:2px 0}
+.hold-ratio .rr-track.rr-breach{background:#F4CFC9}
+.hold-ratio .rr-track.rr-near{background:#F6E6C6}
+.hold-ratio .rr-track.rr-ok{background:#DCEFE3}
+.hold-ratio .rr-mark{position:absolute;top:50%;width:12px;height:12px;border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 0 0 2px #fff;z-index:2}
+.hold-ratio .rr-axis{display:flex;justify-content:space-between;align-items:center;font-size:10.5px;color:var(--muted);margin-top:5px}
+.hold-ratio .rr-axis .rr-cur{font-weight:600;color:var(--ink)}
+.hold-ratio .rr-badge{display:inline-block;margin-top:6px;padding:2px 10px;border-radius:11px;font-size:12px;font-weight:600}
+.hold-ratio .rr-badge.b-down{background:#F8D7D2;color:#B03021}
+.hold-ratio .rr-badge.b-warn{background:#FBF0D8;color:#8a5a10}
+.hold-ratio .rr-badge.b-ok{background:#E4F3EA;color:#2f6b4a}
+.hold-ratio .rr-desc{margin-top:6px;font-size:11.5px;color:var(--muted);line-height:1.55}
 /* 条件单诊断 · 每回合手续费占比 */
 .cd-fee{background:var(--band);border:1px solid var(--bandline);border-radius:3px;padding:10px 12px;margin:10px 0}
 .cd-fee-h{font-size:12px;font-weight:600;color:var(--warn);margin-bottom:7px}
@@ -581,6 +597,10 @@ const TEST_GRID_ID = "g_test_trigger_588000";
 const KEY_TESTGRID2 = LS+"testgrid2";
 const KEY_TESTDISMISS2 = LS+"testdismiss2";
 const TEST_GRID2_ID = "g_test_trigger_159915";
+// 第三个本地测试网格：穿轨风险可视化演示——故意让现价跌破下轨，展示「持仓占比 + 穿轨风险」可视化效果（_noAuto：钉住现价不被行情刷新覆盖）
+const KEY_TESTGRID3 = LS+"testgrid3";
+const KEY_TESTDISMISS3 = LS+"testdismiss3";
+const TEST_GRID3_ID = "g_test_trigger_railrisk";
 // 默认云端配置：内置本项目 Supabase 凭证，首次打开即自动启用云端同步；用户可在面板关闭或改填其他项目
 const DEFAULT_CLOUD = {
   url: "https://hlhsoyuzffndxahwfady.supabase.co",
@@ -717,6 +737,35 @@ function buildTestGrid2(){
     _sample:false, _noCloudSync:true, _testGrid:true, _autoRec:{}
   };
 }
+/* 穿轨风险可视化演示网格：现价故意跌破下轨（满仓·被套场景），用于展示「持仓占比 + 穿轨风险」联动效果。
+   _noAuto=true → autoGridMonitor 跳过，现价钉在演示值不被行情刷新覆盖。 */
+function buildTestGrid3(){
+  const base=4.00, init=30000, sp=0.025, up=5, dn=5;   // 上轨=4.00×1.025^5≈4.526 / 下轨=4.00×0.975^5≈3.522
+  const baseQty=Math.max(100, Math.floor((init/2)/base/100)*100);   // 半仓15000÷4.00≈3750 → 整手3800股
+  const params={
+    basePrice:base, spacingPct:sp, upGrids:up, downGrids:dn, qtyPerTrade:800,
+    feeRate:0.0001, minFee:5, initCapital:init, targetBaseCost:baseQty,
+    startPrice:base, startDate:"2026-09-08", currentPrice:3.40, high52:null, high60:null,   // 3.40 < 下轨3.522 → 向下穿轨
+    modifyDate:"2026-09-08"
+  };
+  // 建仓 + 价格下行途中分批买入（净值跌破下轨，满仓场景）
+  const trades=[
+    { date:"2026-09-08", type:"建仓", trigger:base, qty:baseQty, close:base },
+    { date:"2026-09-08", type:"买入", trigger:3.92, qty:800, close:3.90 },
+    { date:"2026-09-08", type:"买入", trigger:3.82, qty:800, close:3.80 },
+    { date:"2026-09-08", type:"买入", trigger:3.72, qty:800, close:3.70 },
+    { date:"2026-09-08", type:"买入", trigger:3.62, qty:800, close:3.60 }
+  ];
+  return {
+    id: TEST_GRID3_ID,
+    meta:{ code:"sz159922", name:"中证500ETF·穿轨演示" },
+    createdAt: todayISO(),
+    cond:{ locked:true, configured:true, params: clone(params),
+      history:[{ params: clone(params), setAt:"2026-09-08", note:"演示条件单：基准=4.00、间距2.5%、上5/下5格，现价3.40已破下轨3.522（向下穿轨·满仓场景）" }] },
+    trades, pricePath:[], market:null, stop:null, paused:null,
+    _sample:false, _noCloudSync:true, _testGrid:true, _noAuto:true, _autoRec:{}
+  };
+}
 /* 打开工作台时确保测试网格存在（本地，云无关）：若已删除则不再添加；否则从本地存档恢复或新建。
    支持多个本地测试网格（每个独立 dismiss key，互不干扰）。 */
 function ensureTestGrid(){
@@ -748,13 +797,14 @@ function ensureTestGrid(){
     };
     ensureOne(TEST_GRID_ID, buildTestGrid, KEY_TESTGRID, KEY_TESTDISMISS);
     ensureOne(TEST_GRID2_ID, buildTestGrid2, KEY_TESTGRID2, KEY_TESTDISMISS2);
+    ensureOne(TEST_GRID3_ID, buildTestGrid3, KEY_TESTGRID3, KEY_TESTDISMISS3);
     try{ autoGridMonitor(); }catch(e){ console.warn("测试网格自动录入初始化失败：",e); }
   }catch(e){ console.warn("ensureTestGrid 失败：",e); }
 }
 /* 将测试网格（含已自动录入的成交与按日去重标记）持久化到本机，确保跨刷新不重复录入 */
 function persistTestGrid(){
   try{
-    [[TEST_GRID_ID, KEY_TESTGRID],[TEST_GRID2_ID, KEY_TESTGRID2]].forEach(([id,key])=>{
+    [[TEST_GRID_ID, KEY_TESTGRID],[TEST_GRID2_ID, KEY_TESTGRID2],[TEST_GRID3_ID, KEY_TESTGRID3]].forEach(([id,key])=>{
       const tg=state.grids.find(g=>g.id===id);
       if(tg) localStorage.setItem(key, JSON.stringify(tg));
     });
@@ -1035,6 +1085,46 @@ function gridLevels(p){
   for(let i=1;i<=p.downGrids;i++) down.push(base*Math.pow(1-sp,i));
   for(let i=1;i<=p.upGrids;i++) up.push(base*Math.pow(1+sp,i));
   return {down,up,upper:base*Math.pow(1+sp,p.upGrids),lower:base*Math.pow(1-sp,p.downGrids),base};
+}
+
+/* 穿轨风险可视化：现价 vs 网格上下轨（基准=初始基准价）。
+   越界即穿轨：上穿=踏空（上方网格失效）、下穿=满仓被套（下方网格失效）。建仓阶段/未建条件单不判定。 */
+function renderRailRisk(g, sm){
+  if(!g || !isConfigured(g)) return "";
+  const c=g.cond.params;
+  if(!(c.basePrice>0) || !(c.spacingPct>0) || !((c.upGrids||0)>0 && (c.downGrids||0)>0)) return "";
+  const gl=gridLevels(c), upper=gl.upper, lower=gl.lower, base=gl.base;
+  const cur=(sm && sm.cur) || c.currentPrice || 0;
+  if(!(cur>0)) return "";
+  const sp=c.spacingPct;
+  let status, tone, desc;
+  if(cur>=upper){
+    status="向上穿轨（破上轨）"; tone="down";
+    desc=`现价 ¥${fmt(cur,3)} 已突破上轨 ¥${fmt(upper,3)}，上方网格全部越过、不再触发卖出；已落袋收益冻结，继续上涨踏空，回落至区间内方能重新被网格接住。`;
+  } else if(cur<=lower){
+    status="向下穿轨（破下轨）"; tone="down";
+    desc=`现价 ¥${fmt(cur,3)} 已跌破下轨 ¥${fmt(lower,3)}，下方网格全部越过、不再触发买入；现金已耗尽或持仓已满，继续下跌被套，反弹至区间内方能重新被网格接住。`;
+  } else {
+    const nearUp=cur>=upper*(1-sp), nearDn=cur<=lower*(1+sp);
+    if(nearUp){ status="接近上轨"; tone="warn"; desc=`现价距上轨 ¥${fmt(upper,3)} 不足一格，临近向上穿轨（持仓可能即将清空、踏空风险上升）。`; }
+    else if(nearDn){ status="接近下轨"; tone="warn"; desc=`现价距下轨 ¥${fmt(lower,3)} 不足一格，临近向下穿轨（现金可能即将耗尽、被套风险上升）。`; }
+    else { status="区间内（网格有效）"; tone="ok"; desc=`现价位于上下轨之间，网格双向触发均有效。`; }
+  }
+  const span=upper-lower;
+  let posPct = span>0 ? (cur-lower)/span*100 : 50;
+  posPct = Math.max(0, Math.min(100, posPct));   // 标记夹在轨道内；越界由配色/徽标表达
+  const breached=(cur>=upper || cur<=lower);
+  const trackCls = breached? "rr-breach" : (tone==="warn"? "rr-near":"rr-ok");
+  const mkColor = tone==="down"? "#C0392B" : (tone==="warn"? "#C98A1B":"#2f855a");
+  const badgeCls = tone==="down"? "b-down" : (tone==="warn"? "b-warn":"b-ok");
+  return `
+  <div class="rr">
+    <div class="rr-ttl">穿轨风险<span class="rr-sub">现价 vs 网格上下轨（基准 ¥${fmt(base,3)}）</span></div>
+    <div class="rr-track ${trackCls}"><i class="rr-mark" style="left:${posPct}%;background:${mkColor}"></i></div>
+    <div class="rr-axis"><span>下轨 ¥${fmt(lower,3)}</span><span class="rr-cur">现价 ¥${fmt(cur,3)}</span><span>上轨 ¥${fmt(upper,3)}</span></div>
+    <div class="rr-badge ${badgeCls}">${status}</div>
+    <div class="rr-desc">${desc}</div>
+  </div>`;
 }
 
 /* 成交驱动型：最新基准价 = 上一次网格触发（买入/卖出）的成交价格；无则取条件单初始基准价 */
@@ -3411,6 +3501,7 @@ function renderDetail(g){
   const hrReady = sm.gridPos>0 && sm.cur>0 && hrTotal>0;
   const hrMvPct = hrReady ? hrMv/hrTotal*100 : 0;
   const hrCshPct = hrReady ? Math.max(0, 100-hrMvPct) : 0;
+  const railRiskBlock = renderRailRisk(g, sm);   // 穿轨风险可视化（建仓阶段/未建条件单时返回 ""）
   const hrBlock = hrReady ? `
   <div class="hold-ratio">
     <div class="hr-ttl">持仓占比<span class="hr-sub">持仓市值 ÷ 总资产（红=持仓 / 黄=现金）</span></div>
@@ -3419,10 +3510,12 @@ function renderDetail(g){
       <span><i class="hr-dot" style="background:var(--down)"></i>持仓市值 <b>¥${fmt(hrMv,0)}</b> · <span class="hr-pct">${hrMvPct.toFixed(1)}%</span></span>
       <span><i class="hr-dot" style="background:var(--warn)"></i>现金 <b>¥${fmt(hrCash,0)}</b> · <span class="hr-pct">${hrCshPct.toFixed(1)}%</span></span>
     </div>
+    ${railRiskBlock}
   </div>` : `
   <div class="hold-ratio">
     <div class="hr-ttl">持仓占比<span class="hr-sub">持仓市值 ÷ 总资产</span></div>
     <div class="hint" style="margin-top:4px">建仓阶段 / 暂无持仓，持仓占比暂不适用。</div>
+    ${railRiskBlock}
   </div>`;
   const tf = g._tf || (g._tf={type:'all',range:'all'});
   const ftype = tf.type||'all';
@@ -4735,7 +4828,7 @@ function delGrid(id){
   const inPfs=pfList().filter(p=>(p.members||[]).some(m=>m.gridId===id));
   const pfNote = inPfs.length? `<br><span style="color:#8A6A2F">该标的已在 ${inPfs.length} 个资产组合中——删除后会自动从这些组合中移除（组合本身保留）。</span>` : "";
   confirmModal("删除网格","将删除「"+esc(g.meta.name)+"（"+esc(g.meta.code)+"）」及其全部交易、条件单历史与行情。此操作不可逆！"+pfNote,()=>{
-    if(g._testGrid){ try{ if(id===TEST_GRID_ID){ localStorage.setItem(KEY_TESTDISMISS,"1"); localStorage.removeItem(KEY_TESTGRID); } else { localStorage.setItem(KEY_TESTDISMISS2,"1"); localStorage.removeItem(KEY_TESTGRID2); } }catch(e){} } // 删除任一测试网格后不再自动添加（按 id 区分）
+    if(g._testGrid){ try{ if(id===TEST_GRID_ID){ localStorage.setItem(KEY_TESTDISMISS,"1"); localStorage.removeItem(KEY_TESTGRID); } else if(id===TEST_GRID2_ID){ localStorage.setItem(KEY_TESTDISMISS2,"1"); localStorage.removeItem(KEY_TESTGRID2); } else { localStorage.setItem(KEY_TESTDISMISS3,"1"); localStorage.removeItem(KEY_TESTGRID3); } }catch(e){} } // 删除任一测试网格后不再自动添加（按 id 区分）
     state.grids=state.grids.filter(x=>x.id!==id);
     /* 从所有已保存组合与草稿中摘除该成员（组合本身保留） */
     state.portfolios.forEach(p=>{ p.members=(p.members||[]).filter(m=>m.gridId!==id); });
@@ -5085,7 +5178,7 @@ const AUTO_MONITOR_MS = 60000;   // 每 60 秒巡检一次（仅页面打开时�
 function autoGridMonitor(){
   if(state._autoMonitor===false) return;          // 默认开启；可在「今天要处理」中关闭
   const today=todayISO();
-  const targets = state.grids.filter(g=> isConfigured(g) && !isStopped(g) && !isPaused(g));
+  const targets = state.grids.filter(g=> isConfigured(g) && !isStopped(g) && !isPaused(g) && !g._noAuto);
   if(!targets.length) return;
   Promise.all(targets.map(g=>{
     const code=g.meta.code;
