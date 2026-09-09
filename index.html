@@ -59,6 +59,17 @@ h1{font-size:25px;font-weight:600;margin:5px 0 2px;letter-spacing:.01em;}
 .tag.urgent{background:#FBEDEA;color:var(--up);border:1px solid #EAC9C2}
 .tag.info{background:transparent;border:1px solid var(--ink);color:var(--ink)}
 .tag.ok{background:#E8F1EC;color:var(--down);border:1px solid #C4E0D0}
+/* 今日自动录入：状态栏只显示「已录入X笔」，鼠标移入/点按展开浮窗看具体明细 */
+.auto-rec-pop{position:relative;cursor:pointer;outline:none}
+.auto-rec-tip{display:none;position:absolute;left:0;top:calc(100% + 8px);z-index:60;background:#2B2B2B;color:#F4F4F4;padding:10px 12px;border-radius:10px;font-size:12.5px;line-height:1.5;box-shadow:0 8px 24px rgba(0,0,0,.22);min-width:180px;max-width:86vw;text-align:left;white-space:normal}
+.auto-rec-tip::before{content:"";position:absolute;left:18px;top:-6px;border:6px solid transparent;border-bottom-color:#2B2B2B;border-top:0}
+.auto-rec-pop:hover .auto-rec-tip, .auto-rec-pop:focus .auto-rec-tip, .auto-rec-pop.open .auto-rec-tip{display:block}
+.auto-rec-tip .auto-rec-h{font-size:11px;color:#B9B9B9;margin-bottom:6px;letter-spacing:.04em}
+.auto-rec-line{padding:3px 0;border-bottom:1px solid rgba(255,255,255,.08)}
+.auto-rec-line:last-child{border-bottom:0}
+.auto-rec-line .nm{color:#9FD3B6;font-weight:600}
+.auto-rec-line .tp-buy{color:#FF8A80}
+.auto-rec-line .tp-sell{color:#80CBC4}
 .tag.auto{background:#E7F0E9;color:#2E7D5B;border:1px solid #BFE0C8}
 .mini-auto{display:inline-block;margin-left:4px;padding:0 5px;border-radius:2px;font-size:10.5px;background:#E7F0E9;color:#2E7D5B;border:1px solid #BFE0C8;vertical-align:middle}
 tbody tr.hl-auto{background:#F2F8F3}
@@ -3281,12 +3292,12 @@ function renderBandGlobal(sums){
   const items=[];
   const icon=`<svg viewBox="0 0 24 24" fill="none" stroke="#9A6B1F" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>`;
   let totalTrades=0; state.grids.forEach(g=>totalTrades+=g.trades.length);
-  // 今日自动录入成交汇总（置顶提示"已自动录入"）
+  // 今日自动录入成交汇总（置顶提示"已自动录入"）：状态栏只显示「已录入X笔」，明细移入浮窗
   const autoTradesAll=[];
   state.grids.forEach(g=> g.trades.forEach(t=>{ if(t._auto && t.date===todayISO() && (t.type==='买入'||t.type==='卖出')) autoTradesAll.push({g,t}); }));
   if(autoTradesAll.length){
-    const txt=autoTradesAll.map(({g,t})=>`「${g.meta.name}」${t.type} ${fmt(t.qty,0)}股 @¥${fmt(t.trigger,3)}`).join('；');
-    items.unshift(`<span class="tag ok">已自动录入</span> 今日已自动录入 <b>${autoTradesAll.length}</b> 笔成交（条件单触发）：${txt}。`);
+    const detailRows = autoTradesAll.map(({g,t})=>`<div class="auto-rec-line"><span class="nm">「${g.meta.name}」</span> <span class="tp-${t.type==='买入'?'buy':'sell'}">${t.type}</span> ${fmt(t.qty,0)}股 @¥${fmt(t.trigger,3)}</div>`).join('');
+    items.unshift(`<span class="tag ok">已自动录入</span> <span class="auto-rec-pop" tabindex="0" onclick="this.classList.toggle('open')">今日已自动录入 <b>${autoTradesAll.length}</b> 笔成交（条件单触发）<span class="auto-rec-tip"><div class="auto-rec-h">今日自动录入明细（${autoTradesAll.length} 笔）</div>${detailRows}</span></span>`);
   }
   if(totalTrades>=30) items.push(`<span class="tag info">备份提醒</span> 已累计 ${totalTrades} 笔交易，建议导出 JSON 备份。`);
   sums.forEach(({g,sm})=>{
