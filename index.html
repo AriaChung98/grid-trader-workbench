@@ -686,14 +686,14 @@ function buildTestGrid(){
 /* 第二个连续触发测试标的：创业板ETF(sz159915)，基准=09-08收盘3.376，间距0.5%，每笔800，初始3万，半仓约4400股；
    昨天(09-08)已建仓，今天上午(09-09)实盘中 159915 在 3.346~3.415 区间震荡（振幅约2.06%）→ 成交驱动逻辑应自动录入多笔。 */
 function buildTestGrid2(){
-  const base=3.376;
+  const base=3.376, init=30000;
+  const baseQty=Math.max(100, Math.floor((init/2)/base/100)*100);   // 半仓15000元 ÷ 现价3.376 ≈ 4443 → 整手4400股（targetBaseCost 单位=股，与前一测试网格一致）
   const params={
     basePrice:base, spacingPct:0.005, upGrids:11, downGrids:11, qtyPerTrade:800,
-    feeRate:0.0001, minFee:5, initCapital:30000, targetBaseCost:15000,
+    feeRate:0.0001, minFee:5, initCapital:init, targetBaseCost:baseQty,
     startPrice:base, startDate:"2026-09-08", currentPrice:base, high52:null, high60:null,
     modifyDate:"2026-09-08"
   };
-  const baseQty=Math.max(100, Math.floor(15000/base/100)*100);   // 半仓约15000 / 现价 → 整手（≈4400）
   return {
     id: TEST_GRID2_ID,
     meta:{ code:"sz159915", name:"创业板ETF·连续触发测试" },
@@ -711,9 +711,24 @@ function ensureTestGrid(){
   try{
     const ensureOne=(id, buildFn, keyLocal, keyDismiss)=>{
       if(localStorage.getItem(keyDismiss)) return;          // 该测试网格曾被用户删除 → 不再自动添加
-      if(state.grids.some(g=>g.id===id)) return;            // 已在 → 跳过
+      /* 底仓(targetBaseCost 按"股"计)市值不得超过初始资金：否则为"元/股"单位错配等脏数据，需修正。
+         注：targetBaseCost 全系统统一定义为"股"（calcPosCaps/recalcDerived/calcQtySug 均按股处理）。 */
+      const baseCorrupt=(p)=> p && p.targetBaseCost>0 && p.basePrice>0 && p.initCapital>0
+                             && p.targetBaseCost*p.basePrice > p.initCapital;
+      const ex=state.grids.find(g=>g.id===id);
+      if(ex){                                                // 已在 state（含本地存档）：校验并就地修正
+        if(baseCorrupt(ex.cond && ex.cond.params)){
+          const nf=buildFn();
+          ex.cond.params.targetBaseCost=nf.cond.params.targetBaseCost;
+          recalcDerived(ex.cond.params, (ex.market? ex.market.kline : ex.pricePath));  // 重算持仓上下限
+          try{ localStorage.setItem(keyLocal, JSON.stringify(ex)); }catch(e){}
+          try{ save(); }catch(e){}                           // 持久化修正到主存档(KEY_STATE)
+        }
+        return;
+      }
       let tg=null;
       try{ const r=localStorage.getItem(keyLocal); if(r) tg=JSON.parse(r); }catch(e){}
+      if(tg && tg.id===id && baseCorrupt(tg.cond && tg.cond.params)) tg=null;  // 本地存档脏数据 → 重建
       if(!tg || tg.id!==id) tg=buildFn();
       try{ localStorage.setItem(keyLocal, JSON.stringify(tg)); }catch(e){}
       state.grids.push(tg);
