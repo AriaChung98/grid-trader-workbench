@@ -162,13 +162,11 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .ac-bar{display:flex;height:10px;border-radius:2px;overflow:hidden;background:var(--line);flex:0 0 auto}
 .ac-bar .mv{background:var(--down)}
 .ac-bar .csh{background:var(--warn)}
-.ac-val{margin-left:6px;font-size:12.5px;font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap;flex:0 0 auto}
+.ac-val{margin-left:8px;width:136px;text-align:right;font-size:12.5px;font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap;flex:0 0 auto}
 .ac-num{font-size:11px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;flex:0 0 auto}
 .ac-num b{color:var(--ink);font-weight:600}
 .ac-legend{display:flex;align-items:center;gap:16px;font-size:12px;color:var(--muted);flex-wrap:wrap}
 .ac-dot{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:middle}
-.ac-item.cash{background:#FBF8F1;border:1px solid #EFE4CC;border-radius:7px;padding:7px 9px;margin:0 -9px}
-.ac-item.cash .ac-bar{outline:1px dashed var(--warn);outline-offset:1px}
 /* 条件单诊断 · 每回合手续费占比 */
 .cd-fee{background:var(--band);border:1px solid var(--bandline);border-radius:3px;padding:10px 12px;margin:10px 0}
 .cd-fee-h{font-size:12px;font-weight:600;color:var(--warn);margin-bottom:7px}
@@ -4067,23 +4065,24 @@ function pfAssetsChartHTML(pf){
     const w=Math.max(MIN_W, Math.round(share*FULL_W));
     const pctTxt=pct(share,1);
     if(x.isCash){
-      return `<div class="ac-item cash">
+      return `<div class="ac-item">
       <div class="ac-top">
         <span class="ac-nm" style="font-size:13px;color:var(--muted)">${esc(x.name)}</span>
         <span class="ac-bar" style="width:${w}px"><i class="csh" style="width:100%"></i></span>
         <span class="ac-val">¥${fmt(x.total,0)} · ${pctTxt}</span>
       </div>
-      <div class="ac-num">流动现金（计划投入中未分配至任何标的）<b>¥${fmt(x.cash,0)}</b> · 占组合 <b>${pctTxt}</b></div>
+      <div class="ac-num">流动现金（计划投入中未分配至任何标的）<b>¥${fmt(x.cash,0)}</b> · 持仓占比 <b>0%</b> · 占组合 <b>${pctTxt}</b></div>
     </div>`;
     }
     const mvp=x.total>0? x.mv/x.total*100 : 0;
+    const holdTxt=mvp>0? mvp.toFixed(1)+"%" : "0%";
     return `<div class="ac-item">
       <div class="ac-top">
         <span class="ac-nm" style="font-size:${fitFontSize(x.name,150,13)}px">${esc(x.name)}</span>
         <span class="ac-bar" style="width:${w}px"><i class="mv" style="width:${mvp}%"></i><i class="csh" style="width:${100-mvp}%"></i></span>
         <span class="ac-val">¥${fmt(x.total,0)} · ${pctTxt}</span>
       </div>
-      <div class="ac-num">持仓市值 <b>¥${fmt(x.mv,0)}</b> · 现有现金 <b>¥${fmt(x.cash,0)}</b> · 占组合 <b>${pctTxt}</b></div>
+      <div class="ac-num">持仓市值 <b>¥${fmt(x.mv,0)}</b>（持仓占比 <b>${holdTxt}</b>）· 现有现金 <b>¥${fmt(x.cash,0)}</b> · 占组合 <b>${pctTxt}</b></div>
     </div>`;
   }).join("");
   return `<div class="card"><div class="card-body">
