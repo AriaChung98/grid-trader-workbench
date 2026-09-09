@@ -966,36 +966,25 @@ function gridLevels(p){
 }
 
 /* 成交驱动型：最新基准价 = 上一次网格触发（买入/卖出）的成交价格；无则取条件单初始基准价 */
-function latestBasePrice(g){
-  const gridT = g.trades.filter(t=>t.type==="买入"||t.type==="卖出").sort((a,b)=>a.date<b.date?1:-1);
-  const last = gridT[0];
-  return last ? last.trigger : g.cond.params.basePrice;
+/* 近一次成交价（成交驱动基准价）：取最近一笔买入/卖出成交价；同日多笔按录入顺序取最后一笔；无成交则用初始基准价 */
+function lastDealPrice(trades, basePrice){
+  let best=null, bi=-1;
+  (trades||[]).forEach((t,i)=>{
+    if(t.type!=="买入"&&t.type!=="卖出") return;
+    if(best===null || t.date>best.date || (t.date===best.date && i>bi)){ best=t; bi=i; }
+  });
+  return best ? best.trigger : basePrice;
 }
+function latestBasePrice(g){ return lastDealPrice(g.trades, g.cond.params.basePrice); }
 
-/* 固定网格线（锚定初始基准价 base0）计算"下次买入/卖出触发价"：
-   - 下次买入 = 现价下方最近的买入线（最高且 < 现价），跳过今日已触发线
-   - 下次卖出 = 现价上方最近的卖出线（最低且 > 现价），跳过今日已触发线
-   保证 买入触发价 < 现价 < 卖出触发价（现价位于网格区间内时）。
-   区别于 latestBasePrice（成交驱动，用于回测锚点）；此处用固定网格线，与自动录入引擎(autoGridMonitor)同口径。 */
+/* 成交驱动（deal-driven）网格：基准价 = 近一次成交价（无成交则用初始基准价）。
+   下次买入 = 基准价×(1−间距)，下次卖出 = 基准价×(1+间距)；
+   自动录入引擎(autoGridMonitor)按当日分时路径扫描、每穿越一格记录一笔、记录后基准价顺移至该成交价，
+   故现价恒落在「下次买入线 < 现价 ≤ 下次卖出线」附近（基准价即最近穿越点）。 */
 function nextTriggerLines(c, trades, cur){
-  const base=c.basePrice;
+  const base = lastDealPrice(trades, c.basePrice);
   const sp=c.spacingPct;
-  const downN=c.downGrids||0, upN=c.upGrids||0;
-  const EPS=1e-9;
-  const r3=v=>Math.round(v*1000)/1000;
-  const today=todayISO();
-  const firedBuy=new Set((trades||[]).filter(t=>t.date===today && t.type==="买入").map(t=>r3(t.trigger)));
-  const firedSell=new Set((trades||[]).filter(t=>t.date===today && t.type==="卖出").map(t=>r3(t.trigger)));
-  const near=(set,v)=>{ for(const f of set) if(Math.abs(f-v)<0.0015) return true; return false; };  // 容差匹配，避免取整差 0.001 把已成交线当"下一条"
-  const buyLines=[];
-  for(let k=1;k<=downN;k++){ const lv=r3(base*Math.pow(1-sp,k)); if(lv>=base-EPS) break; buyLines.push(lv); }
-  const sellLines=[];
-  for(let k=1;k<=upN;k++){ const lv=r3(base*Math.pow(1+sp,k)); if(lv<=base+EPS) break; sellLines.push(lv); }
-  let buyNext=null;
-  for(let i=0;i<buyLines.length;i++){ const lv=buyLines[i]; if(near(firedBuy,lv)) continue; if(lv < cur-EPS){ buyNext=lv; break; } }
-  let sellNext=null;
-  for(let i=0;i<sellLines.length;i++){ const lv=sellLines[i]; if(near(firedSell,lv)) continue; if(lv > cur+EPS){ sellNext=lv; break; } }
-  return {base, buyNext, sellNext};
+  return { base, buyNext: base*(1-sp), sellNext: base*(1+sp) };
 }
 
 /* ============ 停止网格（冻结收益/市值/天数） ============ */
@@ -1036,23 +1025,23 @@ function frozenCur(g){
   return sc!=null ? sc : g.cond.params.currentPrice;
 }
 
-/* 条件单下侧：按固定网格线（初始基准价）展示下一次买卖触发价 */
+/* 条件单下侧：按成交驱动（近一次成交价为基准）展示下一次买卖触发价 */
 function renderNextTrigger(g){
   const p=g.cond.params;
   const cur=p.currentPrice||0;
   const {base,buyNext,sellNext}=nextTriggerLines(g.cond.params, g.trades, cur);
   const gridT=g.trades.filter(t=>t.type==="买入"||t.type==="卖出").sort((a,b)=>a.date<b.date?1:-1);
   const last=gridT[0];
-  const src = last ? (`上一笔网格成交：${last.date} ${last.type} @¥${fmt(last.trigger,3)}`) : "尚无网格成交，以初始基准价 ¥"+fmt(g.cond.params.basePrice,3)+" 为参照";
-  const bTxt = buyNext!=null? ("¥"+fmt(buyNext,3)) : "—（现价已低于全部买入线）";
-  const sTxt = sellNext!=null? ("¥"+fmt(sellNext,3)) : "—（现价已高于全部卖出线）";
+  const src = last ? (`近一次成交：${last.date} ${last.type} @¥${fmt(last.trigger,3)}（成交驱动基准价）`) : "尚无网格成交，以初始基准价 ¥"+fmt(g.cond.params.basePrice,3)+" 为参照";
+  const bTxt = "¥"+fmt(buyNext,3);
+  const sTxt = "¥"+fmt(sellNext,3);
   return `<div class="pline" style="margin-top:14px;background:#F7F5EF">
-    <div class="it"><div class="k">网格基准价（初始）</div><div class="val">¥${fmt(base,3)}</div></div>
+    <div class="it"><div class="k">网格基准价（成交驱动）</div><div class="val">¥${fmt(base,3)}</div></div>
     <div class="it"><div class="k">标的现价（实时）</div><div class="val ${signClass((p.currentPrice||0)-base)}">¥${fmt(p.currentPrice,3)}</div></div>
     <div class="it"><div class="k">下次买入触发价 ↓</div><div class="val down">${bTxt}</div></div>
     <div class="it"><div class="k">下次卖出触发价 ↑</div><div class="val up">${sTxt}</div></div>
   </div>
-  <div class="hint">${src}。价格跌至 ${bTxt} 触发<b style="color:var(--down)">买入（网格）</b>，涨至 ${sTxt} 触发<b style="color:var(--up)">卖出（网格）</b>，间距 ${pct(p.spacingPct,2)}。买入线均低于现价、卖出线均高于现价。</div>`;
+  <div class="hint">${src}。价格较基准再跌一个间距至 ${bTxt} 触发<b style="color:var(--down)">买入（网格）</b>，再涨一个间距至 ${sTxt} 触发<b style="color:var(--up)">卖出（网格）</b>，间距 ${pct(p.spacingPct,2)}。基准价=近一次成交价，故现价一般位于买入线与卖出线之间。</div>`;
 }
 
 /* 今日（最近交易日）是否触发网格买卖：以最新基准价为参照，检测最近一根K是否穿越任一网格触发线 */
@@ -1076,27 +1065,15 @@ function todayTriggered(g){
   return false;
 }
 
-/* 网格触发状态：用实时价（仅当最后一根 K 线为「今日」时才用其当日 high/low）对比下个买卖触发点
-   返回 {triggered, sides:['buy'|'sell'...], side, buyNext, sellNext, base}
-   注意：仅当最后一根 K 线日期==今天才采用其 high/low，否则只用实时价——
-   否则陈旧 K 线（最后一根非今日）的高低会误判今日触发方向（如该买却显示卖点）。 */
+/* 网格触发状态（成交驱动）：基准价=近一次成交价；返回 {triggered, sides, side, buyNext, sellNext, base} */
 function gridTriggerStatus(g, cur){
   const c=g.cond.params;
   const {base,buyNext,sellNext}=nextTriggerLines(c, g.trades, cur);
-  const kline=(g.market? g.market.kline : g.pricePath);
-  let dayHigh=cur, dayLow=cur;
-  if(kline && kline.length){
-    const last=kline[kline.length-1];
-    if(last.date===todayISO()){            // 仅今日 K 线才用当日高低，避免陈旧数据误判
-      const hi = last.high!=null? last.high : last.close;
-      const lo = last.low!=null? last.low : last.close;
-      dayHigh=Math.max(cur, hi); dayLow=Math.min(cur, lo);
-    }
-  }
+  const EPS=1e-9;
   const sides=[];
-  for(let k=1;k<=(c.downGrids||0);k++){ const lv=base*Math.pow(1-c.spacingPct,k); if(lv>=base) break; if(dayLow<=lv+1e-9){ sides.push('buy'); break; } }
-  for(let k=1;k<=(c.upGrids||0);k++){ const lv=base*Math.pow(1+c.spacingPct,k); if(lv<=base) break; if(dayHigh>=lv-1e-9){ sides.push('sell'); break; } }
-  return {triggered:sides.length>0, sides, side:sides[0]||null, buyNext, sellNext, base, dayHigh, dayLow};
+  if(cur <= buyNext+EPS) sides.push('buy');
+  if(cur >= sellNext-EPS) sides.push('sell');
+  return {triggered:sides.length>0, sides, side:sides[0]||null, buyNext, sellNext, base};
 }
 
 /* 历史成交：新→旧（同日期按录入逆序），稳定排序 */
@@ -4640,6 +4617,16 @@ function fetchMarketEM(code){
     return {name:price.name, price:price.price, high52,low52,high60,low60,dailyVol:rstd,annVol, kline:chart, source:"eastmoney", fetchedAt:todayISO()};
   });
 }
+/* 当日分时（1分钟）K线：用于成交驱动网格自动录入，按时间顺序扫描穿越。字段顺序 [time,open,close,high,low,...] */
+function fetchIntradayEM(code){
+  const secid=emSecid(code);
+  const end=todayISO().replace(/-/g,""); const beg=end;
+  return fetchWithTimeout(`https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&klt=1&fqt=0&beg=${beg}&end=${end}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57,f58`, 9000)
+    .then(r=>r.json()).then(d=>{
+      if(!d||!d.data||!d.data.klines||!d.data.klines.length) return [];
+      return d.data.klines.map(x=>{ const a=x.split(","); return {t:a[0], open:+a[1], close:+a[2], high:+a[3], low:+a[4]}; });
+    }).catch(()=>[]);
+}
 function fetchTencentPrice(code){
   code=normalizeCode(code);
   return new Promise((res,rej)=>{
@@ -4892,13 +4879,20 @@ function toast(msg){
 
 /* ============ 条件单触发自动录入（监测当日实盘：盘中触及即录入，成交驱动型移动基准价，可一日多次） ============ */
 const AUTO_MONITOR_MS = 60000;   // 每 60 秒巡检一次（仅页面打开时运行）
+/* 成交驱动（deal-driven）自动录入：
+   - 基准价 = 近一次成交价（非今日的最后一笔；无则初始基准价 basePrice）
+   - 按当日分时（1分钟）路径 + 现价，逐根扫描：价格较基准再跌一个间距→买入、再涨一个间距→卖出
+   - 每记录一笔，基准价顺移至该成交价（成交驱动），故下一根只可能触发「更远一格」的线
+   - 单根最多一笔（1分钟内双向穿越只处理其一），杜绝极小间距/高波动下的无限刷单
+   - 用 (日期,方向,价位) 去重合并：刷新/重跑不重复；保留历史成交，仅增量新增（幂等） */
 function autoGridMonitor(){
   if(state._autoMonitor===false) return;          // 默认开启；可在「今天要处理」中关闭
   const today=todayISO();
   const targets = state.grids.filter(g=> isConfigured(g) && !isStopped(g) && !isPaused(g));
   if(!targets.length) return;
   Promise.all(targets.map(g=>{
-    return fetchMarket(g.meta.code).then(m=>{       // 取含当日 high/low 的 K 线，盘中触及也能识别（收盘回归不漏）
+    const code=g.meta.code;
+    return Promise.all([ fetchMarket(code), fetchIntradayEM(code) ]).then(([m, bars])=>{
       if(!m || !(m.price>0)) return null;
       g.market=m;
       g.pricePath=m.kline.map(x=>({date:x.date, close:x.close}));
@@ -4908,45 +4902,38 @@ function autoGridMonitor(){
       const base0=g.cond.params.basePrice;
       if(!(sp>0) || !(base0>0)) return null;
       const qty = Math.max(100, Math.round((g.cond.params.qtyPerTrade||0)/100)*100);  // 整手（100股倍数）
-      const upN=g.cond.params.upGrids||0, downN=g.cond.params.downGrids||0;
-      if(!(upN>0||downN>0)) return null;
-      // 当日 high/low（与 gridTriggerStatus 同口径：仅当最后一根 K 为今日才用其高低，避免陈旧数据误判）
-      const kline=m.kline;
-      let dayHigh=cur, dayLow=cur;
-      if(kline && kline.length){
-        const last=kline[kline.length-1];
-        if(last.date===today){
-          const hi = last.high!=null? last.high : last.close;
-          const lo = last.low !=null? last.low  : last.close;
-          dayHigh=Math.max(cur, hi); dayLow=Math.min(cur, lo);
-        }
-      }
-      /* 固定网格线（相对初始基准价 base0）逐日判定：每个 (方向,价位) 当天最多录一次。
-         这样既能抓「盘中穿越、收盘回归」的 intraday 触发（用当日 high/low 全幅），
-         又杜绝旧逻辑"累积高低 + 成交驱动基准漂移"在极小间距/高波动下无限刷单的 bug。 */
-      g._autoRec = { [today]: (g._autoRec && g._autoRec[today]) || [] };
-      const recSet = g._autoRec[today];
-      const added=[];
+      // 当日分时路径；取不到分时则本 tick 跳过（避免用日K高低误录，下一 tick 有分时再判定）
+      if(!(bars && bars.length)) return null;
+      const path = bars.map(b=>({high:b.high, low:b.low, close:b.close}));
+      path.push({high:cur, low:cur, close:cur});     // 现价作为末点，参与判定
+      // 成交驱动基准：近一次（非今日）成交价；无则初始基准价
+      const prevDeals = g.trades.filter(t=>(t.type==="买入"||t.type==="卖出") && t.date<today)
+        .sort((a,b)=> a.date<b.date?1:(a.date>b.date?-1:0));
+      let base = prevDeals.length? prevDeals[0].trigger : base0;
+      const r3=v=>Math.round(v*1000)/1000;
       const EPS=1e-9;
-      // 买入线 base0*(1-sp)^k（k=1..下格数）：当日最低 <= 该线即视为下穿触发
-      for(let k=1;k<=downN;k++){
-        const lvl = base0*Math.pow(1-sp,k);
-        if(lvl < dayLow - EPS) break;              // 该线及更低的线当日均未触及
-        const key="buy@"+Math.round(lvl*1000)/1000;
-        if(recSet.indexOf(key)>=0) continue;
-        recSet.push(key);
-        g.trades.push({date:today, type:"买入", trigger:round(lvl,3), qty, close:round(cur,3), _auto:true});
-        added.push("买入");
+      const seq=[];
+      for(const bar of path){
+        const buyLine=base*(1-sp), sellLine=base*(1+sp);
+        if(bar.high>=sellLine-EPS && bar.low<=buyLine+EPS){
+          // 双向穿越（罕见）：按收盘方向先处理其一，本根不再处理第二次（防刷单）
+          if(bar.close>=base-EPS){ seq.push({type:"卖出", trigger:r3(sellLine)}); base=r3(sellLine); }
+          else { seq.push({type:"买入", trigger:r3(buyLine)}); base=r3(buyLine); }
+        } else if(bar.high>=sellLine-EPS){ seq.push({type:"卖出", trigger:r3(sellLine)}); base=r3(sellLine); }
+        else if(bar.low<=buyLine+EPS){ seq.push({type:"买入", trigger:r3(buyLine)}); base=r3(buyLine); }
+        // 单根最多一笔
       }
-      // 卖出线 base0*(1+sp)^k（k=1..上格数）：当日最高 >= 该线即视为上穿触发
-      for(let k=1;k<=upN;k++){
-        const lvl = base0*Math.pow(1+sp,k);
-        if(lvl > dayHigh + EPS) break;             // 该线及更高的线当日均未触及
-        const key="sell@"+Math.round(lvl*1000)/1000;
-        if(recSet.indexOf(key)>=0) continue;
-        recSet.push(key);
-        g.trades.push({date:today, type:"卖出", trigger:round(lvl,3), qty, close:round(cur,3), _auto:true});
-        added.push("卖出");
+      // 幂等合并：跳过今日已录入的同价同方向成交，仅增量新增（不删除历史成交）
+      if(g._testGrid){ g.trades = g.trades.filter(t=> !(t._auto && t.date===today)); } // 测试网格：今日自动成交按成交驱动序列干净重算（剔除上一版固定网格遗留）
+      const exist=new Set(g.trades.filter(t=>t.date===today && (t.type==="买入"||t.type==="卖出"))
+        .map(t=> t.type+"@"+r3(t.trigger)));
+      const added=[];
+      for(const d of seq){
+        const key=d.type+"@"+r3(d.trigger);
+        if(exist.has(key)) continue;
+        exist.add(key);
+        g.trades.push({date:today, type:d.type, trigger:d.trigger, qty, close:round(cur,3), _auto:true});
+        added.push(d.type);
       }
       if(added.length){ g._sample=false; return {g, added}; }
       return null;
@@ -4955,7 +4942,7 @@ function autoGridMonitor(){
     const logged = results.filter(Boolean);
     if(!logged.length) return;
     save(); render();
-    logged.forEach(({g,added})=> toast(`已自动录入「${g.meta.name}」今日${added.join('、')}成交`));
+    logged.forEach(({g,added})=> toast(`已自动录入「${g.meta.name}」今日${added.length}笔成交（成交驱动网格）`));
   });
 }
 function toggleAutoMonitor(){
