@@ -565,6 +565,10 @@ const KEY_CLOUD = LS+"cloud";
 const KEY_TESTGRID = LS+"testgrid";
 const KEY_TESTDISMISS = LS+"testdismiss";
 const TEST_GRID_ID = "g_test_trigger_588000";
+// 第二个本地测试网格：创业板ETF(sz159915)，相同成交驱动逻辑，用于再次验证模型稳健性
+const KEY_TESTGRID2 = LS+"testgrid2";
+const KEY_TESTDISMISS2 = LS+"testdismiss2";
+const TEST_GRID2_ID = "g_test_trigger_159915";
 // 默认云端配置：内置本项目 Supabase 凭证，首次打开即自动启用云端同步；用户可在面板关闭或改填其他项目
 const DEFAULT_CLOUD = {
   url: "https://hlhsoyuzffndxahwfady.supabase.co",
@@ -679,25 +683,54 @@ function buildTestGrid(){
     _sample:false, _noCloudSync:true, _testGrid:true, _autoRec:{}
   };
 }
-/* 打开工作台时确保测试网格存在（本地，云无关）：若已删除则不再添加；否则从本地存档恢复或新建 */
+/* 第二个连续触发测试标的：创业板ETF(sz159915)，基准=09-08收盘3.376，间距0.5%，每笔800，初始3万，半仓约4400股；
+   昨天(09-08)已建仓，今天上午(09-09)实盘中 159915 在 3.346~3.415 区间震荡（振幅约2.06%）→ 成交驱动逻辑应自动录入多笔。 */
+function buildTestGrid2(){
+  const base=3.376;
+  const params={
+    basePrice:base, spacingPct:0.005, upGrids:11, downGrids:11, qtyPerTrade:800,
+    feeRate:0.0001, minFee:5, initCapital:30000, targetBaseCost:15000,
+    startPrice:base, startDate:"2026-09-08", currentPrice:base, high52:null, high60:null,
+    modifyDate:"2026-09-08"
+  };
+  const baseQty=Math.max(100, Math.floor(15000/base/100)*100);   // 半仓约15000 / 现价 → 整手（≈4400）
+  return {
+    id: TEST_GRID2_ID,
+    meta:{ code:"sz159915", name:"创业板ETF·连续触发测试" },
+    createdAt: todayISO(),
+    cond:{ locked:true, configured:true, params: clone(params),
+      history:[{ params: clone(params), setAt:"2026-09-08", note:"测试条件单：基准=09-08收盘，间距0.5%，用于验证实盘连续触发自动录入（第二标的）" }] },
+    trades:[ { date:"2026-09-08", type:"建仓", trigger:base, qty:baseQty, close:base } ],
+    pricePath:[], market:null, stop:null, paused:null,
+    _sample:false, _noCloudSync:true, _testGrid:true, _autoRec:{}
+  };
+}
+/* 打开工作台时确保测试网格存在（本地，云无关）：若已删除则不再添加；否则从本地存档恢复或新建。
+   支持多个本地测试网格（每个独立 dismiss key，互不干扰）。 */
 function ensureTestGrid(){
   try{
-    if(localStorage.getItem(KEY_TESTDISMISS)) return;
-    if(state.grids.some(g=>g.id===TEST_GRID_ID)) return;
-    let tg=null;
-    try{ const r=localStorage.getItem(KEY_TESTGRID); if(r) tg=JSON.parse(r); }catch(e){}
-    if(!tg || tg.id!==TEST_GRID_ID) tg=buildTestGrid();
-    try{ localStorage.setItem(KEY_TESTGRID, JSON.stringify(tg)); }catch(e){}
-    state.grids.push(tg);
-    render();
+    const ensureOne=(id, buildFn, keyLocal, keyDismiss)=>{
+      if(localStorage.getItem(keyDismiss)) return;          // 该测试网格曾被用户删除 → 不再自动添加
+      if(state.grids.some(g=>g.id===id)) return;            // 已在 → 跳过
+      let tg=null;
+      try{ const r=localStorage.getItem(keyLocal); if(r) tg=JSON.parse(r); }catch(e){}
+      if(!tg || tg.id!==id) tg=buildFn();
+      try{ localStorage.setItem(keyLocal, JSON.stringify(tg)); }catch(e){}
+      state.grids.push(tg);
+      render();
+    };
+    ensureOne(TEST_GRID_ID, buildTestGrid, KEY_TESTGRID, KEY_TESTDISMISS);
+    ensureOne(TEST_GRID2_ID, buildTestGrid2, KEY_TESTGRID2, KEY_TESTDISMISS2);
     try{ autoGridMonitor(); }catch(e){ console.warn("测试网格自动录入初始化失败：",e); }
   }catch(e){ console.warn("ensureTestGrid 失败：",e); }
 }
 /* 将测试网格（含已自动录入的成交与按日去重标记）持久化到本机，确保跨刷新不重复录入 */
 function persistTestGrid(){
   try{
-    const tg=state.grids.find(g=>g.id===TEST_GRID_ID);
-    if(tg) localStorage.setItem(KEY_TESTGRID, JSON.stringify(tg));
+    [[TEST_GRID_ID, KEY_TESTGRID],[TEST_GRID2_ID, KEY_TESTGRID2]].forEach(([id,key])=>{
+      const tg=state.grids.find(g=>g.id===id);
+      if(tg) localStorage.setItem(key, JSON.stringify(tg));
+    });
   }catch(e){}
 }
 
@@ -1960,11 +1993,13 @@ function pfBacktest(pf){
   const annual=Math.pow(1+Math.max(-0.99,ret), 365/days)-1;
   const actInvest=rows.reduce((a,r)=>a+(r.actual?r.actual.committedCapital:0),0);
   const actProfit=rows.reduce((a,r)=>a+(r.actual?r.actual.totalProfit:0),0);
-  const actAssets=rows.reduce((a,r)=>a+(r.actual?r.actual.totalAssets:0),0);
+  const actInvestSafe = actInvest>0? actInvest : 0;
+  const freeCash = Math.max(0, T - actInvestSafe);   // 计划投入中尚未分配到任何标的的现金 = 用户的流动现金，应计入资产构成与实时总资产
+  const actAssets=rows.reduce((a,r)=>a+(r.actual?r.actual.totalAssets:0),0) + freeCash;
   const actRet= actInvest>0? actProfit/actInvest : 0;
   const actGrid=rows.reduce((a,r)=>a+(r.actual?r.actual.Vcum:0),0);
   return {T, rows, mv, totalAlloc, totalAssets, totalProfit, vGrid, unreal, ret, days, annual,
-          actInvest, actProfit, actAssets, actRet, actGrid, simCount:simRows.length, unmodeledAlloc};
+          actInvest, actProfit, actAssets, actRet, actGrid, freeCash, simCount:simRows.length, unmodeledAlloc};
 }
 
 /* 组合成员「真实口径」汇总：已投 / 实时总资产 均来自各标的真实成交的现金模型（与详情①一致）；
@@ -2081,14 +2116,17 @@ function pfFormHTML(d){
   }).join("");
   /* 组合现状（真实成交口径）：与各标的详情①一致；未建仓标的计 0 */
   const ra=pfRealAssets(on);
+  const freeCash=Math.max(0, T - (ra.invest>0? ra.invest:0));
   const realStrip=`<div class="pf-real" style="border:1px dashed rgba(154,107,31,.45);border-radius:10px;padding:10px 12px;margin-top:12px;background:#FBF8F1">
     <div style="font-size:12px;color:var(--muted);margin-bottom:8px">组合现状 · 真实成交口径（未建仓计 ¥0）——计划投入是预算，不是已到账的钱。</div>
     <div style="display:flex;gap:26px;flex-wrap:wrap">
-      <div><div style="font-size:11px;color:var(--muted)">实时总资产（真实）</div><div style="font-size:16px;font-weight:600;color:#1B1A17">¥${fmt(ra.assets,0)}</div></div>
+      <div><div style="font-size:11px;color:var(--muted)">实时总资产（真实）</div><div style="font-size:16px;font-weight:600;color:#1B1A17">¥${fmt(ra.assets+freeCash,0)}</div></div>
       <div><div style="font-size:11px;color:var(--muted)">已投入（真实）</div><div style="font-size:16px;font-weight:600;color:#1B1A17">¥${fmt(ra.invest,0)}</div></div>
       <div><div style="font-size:11px;color:var(--muted)">计划投入（预算）</div><div style="font-size:16px;font-weight:600;color:#1B1A17">¥${fmt(T,0)}</div></div>
+      ${freeCash>0? `<div><div style="font-size:11px;color:var(--muted)">未分配流动现金</div><div style="font-size:16px;font-weight:600;color:#8A6A2F">¥${fmt(freeCash,0)}</div></div>`:""}
     </div>
     ${ra.unstarted.length? `<div style="margin-top:7px;font-size:11.5px;color:#8A6A2F">未建仓标的 ${ra.unstarted.length} 个：${ra.unstarted.join("、")}（真实计 ¥0，录入首笔成交后自动计入）。</div>`:""}
+    ${freeCash>0? `<div style="margin-top:7px;font-size:11.5px;color:#8A6A2F">计划投入中尚有 ¥${fmt(freeCash,0)} 未分配至任何标的，按流动现金计入资产（非某标的持仓）。</div>`:""}
   </div>`;
   return `<div class="pf-card prev">
     <div class="pf-hd"><div><div class="pf-name">${d.id? "编辑资产组合" : "新增资产组合"}</div>
@@ -3973,6 +4011,8 @@ function symNameHTML(name, base){
   return '<span class="sym-name" style="font-size:'+fs+'px">'+esc(name)+'</span>';
 }
 function pfAssetsChartHTML(pf){
+  const bt=pfBacktest(pf);
+  const freeCash=bt? (bt.freeCash||0) : 0;
   const members=pfMembers(pf).filter(m=>m.on!==false);
   const data=members.map(m=>{
     const sm=computeBacktest(m.g).summary;
@@ -3980,11 +4020,22 @@ function pfAssetsChartHTML(pf){
     const cash=sm.cash||0;
     return {name:m.g.meta.name, mv, cash, total:mv+cash};
   });
+  if(freeCash>0) data.push({name:"未分配流动现金", mv:0, cash:freeCash, total:freeCash, isCash:true});
   const grand=data.reduce((a,x)=>a+x.total,0);
   if(grand<=0) return `<div class="empty">成员均为建仓阶段或未建仓，暂无资产可显示（持仓市值 + 现金 = 总资产）。</div>`;
   const maxT=Math.max.apply(null, data.map(x=>x.total).concat([1]));
   const items=data.map(x=>{
     const w=Math.max(44, Math.round(x.total/maxT*180));
+    if(x.isCash){
+      return `<div class="ac-item">
+      <div class="ac-top">
+        <span class="ac-nm" style="font-size:13px;color:var(--muted)">${esc(x.name)}</span>
+        <span class="ac-bar" style="width:${w}px"><i class="csh" style="width:100%"></i></span>
+        <span class="ac-val">¥${fmt(x.total,0)}</span>
+      </div>
+      <div class="ac-num">流动现金（计划投入中未分配至任何标的）<b>¥${fmt(x.cash,0)}</b></div>
+    </div>`;
+    }
     const mvp=x.total>0? x.mv/x.total*100 : 0;
     return `<div class="ac-item">
       <div class="ac-top">
@@ -3997,7 +4048,7 @@ function pfAssetsChartHTML(pf){
   }).join("");
   return `<div class="card"><div class="card-body">
     <div class="ac-compact">
-      <div class="ac-sum"><span class="ac-lbl">资产构成 · 持仓市值 + 现金</span><span class="ac-grand">¥${fmt(grand,0)}</span></div>
+      <div class="ac-sum"><span class="ac-lbl">资产构成 · 持仓市值 + 现金${freeCash>0? "（含未分配流动现金 ¥"+fmt(freeCash,0)+"）":""}</span><span class="ac-grand">¥${fmt(grand,0)}</span></div>
       <div class="ac-list">${items}</div>
       <div class="ac-legend"><span><i class="ac-dot" style="background:var(--down)"></i>持仓市值</span><span><i class="ac-dot" style="background:var(--warn)"></i>现有现金</span></div>
     </div>
@@ -4554,7 +4605,7 @@ function delGrid(id){
   const inPfs=pfList().filter(p=>(p.members||[]).some(m=>m.gridId===id));
   const pfNote = inPfs.length? `<br><span style="color:#8A6A2F">该标的已在 ${inPfs.length} 个资产组合中——删除后会自动从这些组合中移除（组合本身保留）。</span>` : "";
   confirmModal("删除网格","将删除「"+esc(g.meta.name)+"（"+esc(g.meta.code)+"）」及其全部交易、条件单历史与行情。此操作不可逆！"+pfNote,()=>{
-    if(id===TEST_GRID_ID){ try{ localStorage.setItem(KEY_TESTDISMISS,"1"); localStorage.removeItem(KEY_TESTGRID); }catch(e){} } // 删除测试网格后不再自动添加
+    if(g._testGrid){ try{ if(id===TEST_GRID_ID){ localStorage.setItem(KEY_TESTDISMISS,"1"); localStorage.removeItem(KEY_TESTGRID); } else { localStorage.setItem(KEY_TESTDISMISS2,"1"); localStorage.removeItem(KEY_TESTGRID2); } }catch(e){} } // 删除任一测试网格后不再自动添加（按 id 区分）
     state.grids=state.grids.filter(x=>x.id!==id);
     /* 从所有已保存组合与草稿中摘除该成员（组合本身保留） */
     state.portfolios.forEach(p=>{ p.members=(p.members||[]).filter(m=>m.gridId!==id); });
