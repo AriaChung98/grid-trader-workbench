@@ -205,6 +205,24 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .hold-ratio .rr-badge.b-warn{background:#FBF0D8;color:#8a5a10}
 .hold-ratio .rr-badge.b-ok{background:#E4F3EA;color:#2f6b4a}
 .hold-ratio .rr-desc{margin-top:6px;font-size:11.5px;color:var(--muted);line-height:1.55}
+/* 当前第几格 · 总览/清单/今日处理 角标（全局可用，非仅详情页） */
+.cellchip{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600;color:var(--ink);background:var(--line);vertical-align:middle;margin-left:6px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.cellchip.cell-ok{background:#E4F3EA;color:#2f6b4a}
+.cellchip.cell-warn{background:#FBF0D8;color:#8a5a10}
+.cellchip.cell-down{background:#F8D7D2;color:#B03021}
+/* 持仓-网格耦合（合并 持仓占比 + 穿轨风险 为一张共享价格轴的图） */
+.hold-ratio .hr-merged{margin-top:0}
+.hold-ratio .hr-merged .hr-mtitle{font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px}
+.hold-ratio .hr-merged .hr-msub{font-weight:400;color:var(--muted);font-size:11px;margin-left:7px}
+.hold-ratio .hr-merged .rr-track{margin:6px 0 2px}
+.hold-ratio .hr-merged .hr-prof{position:relative;height:48px;margin-top:9px;border-radius:7px;overflow:hidden;border:1px solid var(--line);background:linear-gradient(90deg,#F6E9E6 0%,#FBF3EB 50%,#E9F1E9 100%)}
+.hold-ratio .hr-merged .hr-prof-svg{position:absolute;inset:0;width:100%;height:100%;display:block}
+.hold-ratio .hr-merged .hr-prof-axis{position:absolute;left:0;right:0;bottom:2px;display:flex;justify-content:space-between;padding:0 5px;font-size:9.5px;color:var(--muted);pointer-events:none}
+.hold-ratio .hr-merged .hr-foot{display:flex;flex-wrap:wrap;gap:7px 14px;align-items:center;margin-top:9px;font-size:12px;color:var(--ink);line-height:1.5}
+.hold-ratio .hr-merged .hr-foot b{font-variant-numeric:tabular-nums}
+.hold-ratio .hr-merged .hr-pill{color:var(--muted)}
+.hold-ratio .hr-merged .hr-pill b{color:var(--down)}
+.hold-ratio .hr-merged .hr-cur{font-weight:600;color:var(--ink)}
 /* 条件单诊断 · 每回合手续费占比 */
 .cd-fee{background:var(--band);border:1px solid var(--bandline);border-radius:3px;padding:10px 12px;margin:10px 0}
 .cd-fee-h{font-size:12px;font-weight:600;color:var(--warn);margin-bottom:7px}
@@ -1186,6 +1204,146 @@ function renderRailRisk(g, sm){
     </div>
     <div class="rr-badge ${badgeCls}">${status}</div>
     <div class="rr-desc">${desc}</div>
+  </div>`;
+}
+
+/* 计算当前价所处的网格档位（与 renderRailRisk 同源，供角标/合并图复用）。
+   返回 null 表示未建条件单 / 缺基准价 / 缺现价，不适用。 */
+function computeGridCell(c, cur){
+  if(!(c.basePrice>0) || !(c.spacingPct>0) || !((c.upGrids||0)>0 && (c.downGrids||0)>0) || !(cur>0)) return null;
+  const gl=gridLevels(c), upper=gl.upper, lower=gl.lower, base=gl.base, sp=c.spacingPct;
+  let tone, status;
+  if(cur>=upper){ status="向上穿轨（破上轨）"; tone="down"; }
+  else if(cur<=lower){ status="向下穿轨（破下轨）"; tone="down"; }
+  else {
+    const nearUp=cur>=upper*(1-sp), nearDn=cur<=lower*(1+sp);
+    if(nearUp){ status="接近上轨"; tone="warn"; }
+    else if(nearDn){ status="接近下轨"; tone="warn"; }
+    else { status="区间内（网格有效）"; tone="ok"; }
+  }
+  const lines=[];
+  for(let k=-c.downGrids;k<=c.upGrids;k++) lines.push({k,price:base*Math.pow(1+sp,k)});
+  let label, kj=null, cellLow, cellHigh;
+  if(cur<=lower){ label="已破下轨 · 网格之外"; cellLow=lower; cellHigh=lower; }
+  else if(cur>=upper){ label="已破上轨 · 网格之外"; cellLow=upper; cellHigh=upper; }
+  else {
+    let j=0; for(let i=0;i<lines.length-1;i++){ if(cur>=lines[i].price && cur<lines[i+1].price){ j=i; break; } }
+    cellLow=lines[j].price; cellHigh=lines[j+1].price; kj=lines[j].k;
+    if(Math.abs(cur-base) < base*sp*0.5) label="基准档";
+    else if(kj>=0) label="基准上方第 "+(kj+1)+" 格";
+    else label="基准下方第 "+(-kj)+" 格";
+  }
+  let depth=0;
+  if(cur<=lower) depth=(lower-cur)/(lower*sp);
+  else if(cur>=upper) depth=(cur-upper)/(upper*sp);
+  return {label,kj,tone,status,upper,lower,base,sp,cellLow,cellHigh,depth,lines};
+}
+
+/* 总览/网格清单/今日处理 用的「当前第几格」角标（无需点进详情） */
+function currentCellChip(g, sm){
+  const c=g.cond.params;
+  const cell=computeGridCell(c, sm.cur);
+  if(!cell) return "";
+  const map={down:"cell-down",warn:"cell-warn",ok:"cell-ok"};
+  let txt=cell.label;
+  if(cell.tone==="down") txt += `（外 ${cell.depth.toFixed(1)} 格）`;
+  return `<span class="cellchip ${map[cell.tone]}" title="当前价 ¥${fmt(sm.cur,3)} 所处网格档位">${txt}</span>`;
+}
+
+/* 合并图：持仓占比 + 穿轨风险 共用一条价格/网格轴。
+   原理：沿网格轴，价格越往下格→越多买入触发→持仓股数越多→持仓占比越高；
+   故「当前档位」与「当前持仓占比」是同一价格轴的两个读数，合二为一。 */
+function renderHoldRailMerged(g, sm){
+  if(!g || !isConfigured(g)) return "";
+  const c=g.cond.params;
+  const cell=computeGridCell(c, sm.cur);
+  if(!cell) return "";
+  const gl=gridLevels(c), upper=gl.upper, lower=gl.lower, base=gl.base, sp=c.spacingPct;
+  const cur=sm.cur;
+  const span=upper-lower, slack=span*0.06;
+  let dLo=lower-slack, dHi=upper+slack;
+  if(cur<dLo) dLo=cur-slack;
+  if(cur>dHi) dHi=cur+slack;
+  const dSpan=dHi-dLo;
+  const pctOf=(p)=>Math.max(0,Math.min(100,(p-dLo)/dSpan*100));
+  const breached=(cur>=upper||cur<=lower);
+  const lines=cell.lines;
+  const ticks=[];
+  for(let i=0;i<lines.length;i++){
+    const k=lines[i].k, p=pctOf(lines[i].price);
+    if(k===-c.downGrids||k===c.upGrids) ticks.push(`<i class="rr-rail" style="left:${p}%"></i>`);
+    else if(k===0) ticks.push(`<i class="rr-base" style="left:${p}%"></i>`);
+    else ticks.push(`<i class="rr-tick" style="left:${p}%"></i>`);
+  }
+  let cellHtml="", cellLow=cell.cellLow, cellHigh=cell.cellHigh, curLbl=cell.label;
+  if(cell.kj!==null){
+    const L=pctOf(cellLow), W=pctOf(cellHigh)-L;
+    cellHtml=`<i class="rr-cell" style="left:${L}%;width:${W}%"></i>`;
+  }
+  const curPct=pctOf(cur);
+  const trackCls=breached?"rr-breach":(cell.tone==="warn"?"rr-near":"rr-ok");
+  const badgeCls=cell.tone==="down"?"b-down":(cell.tone==="warn"?"b-warn":"b-ok");
+  let depthTxt="";
+  if(cur<=lower) depthTxt=` · 已跌破下轨外 <b>${cell.depth.toFixed(1)}</b> 格`;
+  else if(cur>=upper) depthTxt=` · 已突破上轨外 <b>${cell.depth.toFixed(1)}</b> 格`;
+  const outHtml=breached
+    ? (cur<=lower ? `<i class="rr-out" style="left:${pctOf(dLo)}%;width:${pctOf(lower)-pctOf(dLo)}%"></i>`
+                  : `<i class="rr-out" style="left:${pctOf(upper)}%;width:${pctOf(dHi)-pctOf(upper)}%"></i>`)
+    : "";
+  /* 持仓占比剖面：以当前持仓为锚，沿网格轴按「每下一格多买一笔 / 每上一格多卖一笔」推算各价位持仓占比 */
+  const hrMv=sm.gridPos*sm.cur, hrTotal=sm.totalAssets||0, hrCash=hrTotal-hrMv;
+  const hrReady=sm.gridPos>0 && sm.cur>0 && hrTotal>0;
+  const hrMvPct=hrReady?hrMv/hrTotal*100:0;
+  let kCur=0;
+  for(let i=0;i<lines.length-1;i++){ if(cur>=lines[i].price && cur<lines[i+1].price){ kCur=lines[i].k; break; } }
+  const q=c.qtyPerTrade||0;
+  const profAt=(k)=>{
+    let holding=sm.gridPos, cash=hrCash, pk=cur;
+    const steps=k-kCur;
+    if(steps!==0){
+      const dir=steps<0?-1:1;
+      for(let i=0;i<Math.abs(steps);i++){
+        const nk=kCur+dir*(i+1);
+        const pn=base*Math.pow(1+sp,nk);
+        if(dir<0){ holding+=q; cash-=q*pn; } else { holding=Math.max(0,holding-q); cash+=q*pn; }
+      }
+    }
+    pk=base*Math.pow(1+sp,k);
+    if(cash<0) cash=0;
+    const ta=holding*pk+cash;
+    return ta>0?Math.max(0,Math.min(100,holding*pk/ta*100)):0;
+  };
+  const profPts=lines.map(l=>({x:pctOf(l.price), y:profAt(l.k)}));
+  const lp=profPts.map(p=>`${p.x.toFixed(2)},${(100-p.y).toFixed(2)}`).join(" ");
+  const x0=profPts[0].x.toFixed(2), x1=profPts[profPts.length-1].x.toFixed(2);
+  const svg=`<svg class="hr-prof-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+    <polygon points="${x0},100 ${lp} ${x1},100" fill="rgba(178,58,46,.16)"/>
+    <polyline points="${lp}" fill="none" stroke="#B23A2E" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
+    <line x1="${curPct.toFixed(2)}" y1="0" x2="${curPct.toFixed(2)}" y2="100" stroke="#1A56C4" stroke-width="1.4" stroke-dasharray="3 2" vector-effect="non-scaling-stroke"/>
+  </svg>`;
+  return `
+  <div class="hr-merged">
+    <div class="hr-mtitle">持仓-网格耦合<span class="hr-msub">共用价格轴：价格越往下格→买入越多→持仓占比越高</span></div>
+    <div class="rr-track ${trackCls}">
+      ${outHtml}
+      ${cellHtml}
+      ${ticks.join("")}
+      <i class="rr-now" style="left:${curPct}%"></i>
+    </div>
+    <div class="hr-prof">
+      ${svg}
+      <div class="hr-prof-axis"><span>高持仓（低价区）</span><span>低持仓（高价区）</span></div>
+    </div>
+    <div class="rr-axis">
+      <span>下轨 ¥${fmt(lower,3)}</span>
+      <span class="hr-cur">现价 ¥${fmt(cur,3)}${depthTxt}</span>
+      <span>上轨 ¥${fmt(upper,3)}</span>
+    </div>
+    <div class="hr-foot">
+      <span>当前档位：<b>${curLbl}</b>${ (cur>lower&&cur<upper)?`（¥${fmt(cellLow,3)}~¥${fmt(cellHigh,3)}）`:"" }</span>
+      ${hrReady?`<span class="hr-pill">持仓占比 <b>${hrMvPct.toFixed(1)}%</b> · 市值 ¥${fmt(hrMv,0)} / 现金 ¥${fmt(hrCash,0)}</span>`:""}
+      <span class="rr-badge ${badgeCls}">${cell.status}</span>
+    </div>
   </div>`;
 }
 
@@ -3371,7 +3529,7 @@ function renderOverview(){
       : `<input type="checkbox" ${g._include!==false?'checked':''} onchange="toggleInclude('${g.id}')" title="勾选后计入收益总览">`;
     return `<div class="ovrow${inPf?' hidden':''}">
       <div class="sel">${selCell}</div>
-      <div class="sym">${symNameHTML(g.meta.name,15)}${inPf?` <span class="tag lock" title="已被资产组合纳入，收益由组合行计入口径控制">已纳入组合</span>`:""}${isStopped(g)?` <span class="tag stopped">已停止</span>`:""}${isPaused(g)?` <span class="tag warn">已暂停</span>`:""}${!cfg?` <span class="tag info">建仓阶段</span>`:""}<small>${g.meta.code} · 共 ${g.trades.length} 笔 · 今日发生交易 <b>${todays}</b> 笔${isStopped(g)?` · 冻结于 ${g.stop.date}`:""}${isPaused(g)?` · 暂停中（调底仓）`:""}</small></div>
+      <div class="sym">${symNameHTML(g.meta.name,15)}${inPf?` <span class="tag lock" title="已被资产组合纳入，收益由组合行计入口径控制">已纳入组合</span>`:""}${isStopped(g)?` <span class="tag stopped">已停止</span>`:""}${isPaused(g)?` <span class="tag warn">已暂停</span>`:""}${!cfg?` <span class="tag info">建仓阶段</span>`:""}<small>${g.meta.code} · 共 ${g.trades.length} 笔 · 今日发生交易 <b>${todays}</b> 笔${isStopped(g)?` · 冻结于 ${g.stop.date}`:""}${isPaused(g)?` · 暂停中（调底仓）`:""}</small>${currentCellChip(g,sm)}</div>
       <div class="cond">${cfg
         ? `最新基准 <b>¥${fmt(base,3)}</b> · 间距 <b>${pct(c.spacingPct,2)}</b> · 上<b>${c.upGrids}</b>/下<b>${c.downGrids}</b> 格<br>
         每笔 <b>${fmt(c.qtyPerTrade,0)}</b> · 资金 <b>¥${fmt(c.initCapital,0)}</b> · 区间 ¥${fmt(gl.lower,3)}~${fmt(gl.upper,3)}<br>
@@ -3524,21 +3682,28 @@ function renderBandGlobal(sums){
   if(totalTrades>=30 && !ackGet("bak:global")) items.push(`<span class="tag info">备份提醒</span> 已累计 ${totalTrades} 笔交易，建议导出 JSON 备份。<button class="btn sm" style="margin-left:10px" onclick="ackBand('bak:global')">已备份</button>`);
   sums.forEach(({g,sm})=>{
     const c=g.cond.params, gl=gridLevels(c), cur=sm.cur;
-    if(isStopped(g)){ items.push(`<span class="tag stopped">${g.meta.code} 已停止</span> 网格已于 ${g.stop.date} 停止，收益与天数已冻结。`); return; }
-    if(!isConfigured(g)){ items.push(`<span class="tag info">${g.meta.code} 建仓阶段</span> 尚未设置网格条件单，暂无需处理；请先录入建仓交易，再点「补充条件单参数」。`); return; }
-    const trig=gridTriggerStatus(g,cur);
-    const todaysGrid = g.trades.filter(t=>t.date===todayISO() && (t.type==='买入'||t.type==='卖出'));
-    const dirsTxt = trig.sides.length? trig.sides.map(s=> s==='buy'?'买入':'卖出').join(' + ') : '';
-    if(todaysGrid.length>0){
-      const dirTxt = dirsTxt? `（今日触发网格·${dirsTxt}）` : '';
-      const ackDone="done:"+g.id+":"+todayISO();
-      if(!ackGet(ackDone)) items.push(`<span class="tag ok">${g.meta.code} 今日已处理</span> 今日已录入 ${todaysGrid.length} 笔成交${dirTxt}，无需重复录入。<button class="btn sm" style="margin-left:10px" onclick="ackBand('${ackDone}')">确定</button>`);
-    } else if(trig.triggered){
-      const ptxt = trig.sides.includes('buy') ? `下个买点 ¥${fmt(trig.buyNext,3)}` : `下个卖点 ¥${fmt(trig.sellNext,3)}`;
-      items.push(`<span class="tag urgent">${g.meta.code} 已触发网格·${dirsTxt}</span> 当前价 ¥${fmt(cur,3)} 已触及${ptxt}，请及时录入今日${trig.sides[0]==='buy'?'买入':'卖出'}成交。`);
+    const gItems=[];
+    const push=(t)=>gItems.push(t);
+    if(isStopped(g)){ push(`<span class="tag stopped">${g.meta.code} 已停止</span> 网格已于 ${g.stop.date} 停止，收益与天数已冻结。`); }
+    else if(!isConfigured(g)){ push(`<span class="tag info">${g.meta.code} 建仓阶段</span> 尚未设置网格条件单，暂无需处理；请先录入建仓交易，再点「补充条件单参数」。`); }
+    else {
+      const trig=gridTriggerStatus(g,cur);
+      const todaysGrid = g.trades.filter(t=>t.date===todayISO() && (t.type==='买入'||t.type==='卖出'));
+      const dirsTxt = trig.sides.length? trig.sides.map(s=> s==='buy'?'买入':'卖出').join(' + ') : '';
+      if(todaysGrid.length>0){
+        const dirTxt = dirsTxt? `（今日触发网格·${dirsTxt}）` : '';
+        const ackDone="done:"+g.id+":"+todayISO();
+        if(!ackGet(ackDone)) push(`<span class="tag ok">${g.meta.code} 今日已处理</span> 今日已录入 ${todaysGrid.length} 笔成交${dirTxt}，无需重复录入。<button class="btn sm" style="margin-left:10px" onclick="ackBand('${ackDone}')">确定</button>`);
+      } else if(trig.triggered){
+        const ptxt = trig.sides.includes('buy') ? `下个买点 ¥${fmt(trig.buyNext,3)}` : `下个卖点 ¥${fmt(trig.sellNext,3)}`;
+        push(`<span class="tag urgent">${g.meta.code} 已触发网格·${dirsTxt}</span> 当前价 ¥${fmt(cur,3)} 已触及${ptxt}，请及时录入今日${trig.sides[0]==='buy'?'买入':'卖出'}成交。`);
+      }
+      if(cur<gl.lower) push(`<span class="tag urgent">${g.meta.code} 跌破下限</span> 当前价 ¥${fmt(cur,3)} 低于网格下限 ¥${fmt(gl.lower,3)}，建议修改条件单。`);
+      if(cur>gl.upper) push(`<span class="tag urgent">${g.meta.code} 突破上限</span> 当前价 ¥${fmt(cur,3)} 高于上限 ¥${fmt(gl.upper,3)}，建议上移基准或加格。`);
     }
-    if(cur<gl.lower) items.push(`<span class="tag urgent">${g.meta.code} 跌破下限</span> 当前价 ¥${fmt(cur,3)} 低于网格下限 ¥${fmt(gl.lower,3)}，建议修改条件单。`);
-    if(cur>gl.upper) items.push(`<span class="tag urgent">${g.meta.code} 突破上限</span> 当前价 ¥${fmt(cur,3)} 高于上限 ¥${fmt(gl.upper,3)}，建议上移基准或加格。`);
+    const chip=currentCellChip(g,sm);
+    if(gItems.length && chip) gItems[0]=gItems[0]+chip;
+    gItems.forEach(t=>items.push(t));
   });
   if(items.length===0) items.push(`<span class="tag ok">运行平稳</span> 暂无网格触发越界，各标的均处于区间内有条件单运行中。`);
   return `<div class="band"><div class="ttl"><span>今天要处理</span><button class="band-toggle" onclick="toggleAutoMonitor()" title="条件单触发后自动录入成交（默认开启，点此切换）">自动录入 ${state._autoMonitor===false?'关':'开'}</button></div>${items.map(t=>`<div class="row">${icon}<div>${t}</div></div>`).join("")}</div>`;
@@ -3556,28 +3721,21 @@ function renderDetail(g){
   const startDays = isStopped(g) ? Math.max(0, daysBetween(startDay, g.stop.date)) : Math.max(0, daysBetween(startDay, todayISO()));   // 停止网格时天数冻结为 停止日 − 启动日
   const band = renderBandGrid(g, sm, (g.trades.length>0? holdShares : null));
 
-  // 持仓占比可视化：持仓市值 ÷ 总资产（红=持仓 / 黄=现金）；建仓阶段/无持仓时不适用
+  // 持仓占比 + 穿轨风险 合并为「持仓-网格耦合」单图（价格轴共享：价格越往下格→买入越多→持仓占比越高）
   const hrMv = sm.gridPos * sm.cur;
   const hrTotal = sm.totalAssets || 0;
   const hrCash = hrTotal - hrMv;
   const hrReady = sm.gridPos>0 && sm.cur>0 && hrTotal>0;
   const hrMvPct = hrReady ? hrMv/hrTotal*100 : 0;
-  const hrCshPct = hrReady ? Math.max(0, 100-hrMvPct) : 0;
-  const railRiskBlock = renderRailRisk(g, sm);   // 穿轨风险可视化（建仓阶段/未建条件单时返回 ""）
-  const hrBlock = hrReady ? `
+  const mergedBlock = renderHoldRailMerged(g, sm);   // 合并图（含网格带 + 持仓占比剖面 + 当前档位）
+  const hrBlock = (hrReady && mergedBlock) ? `
   <div class="hold-ratio">
-    <div class="hr-ttl">持仓占比<span class="hr-sub">持仓市值 ÷ 总资产（红=持仓 / 黄=现金）</span></div>
-    <div class="hr-bar"><i class="hr-mv" style="width:${hrMvPct.toFixed(1)}%"></i><i class="hr-csh" style="width:${hrCshPct.toFixed(1)}%"></i></div>
-    <div class="hr-legend">
-      <span><i class="hr-dot" style="background:var(--down)"></i>持仓市值 <b>¥${fmt(hrMv,0)}</b> · <span class="hr-pct">${hrMvPct.toFixed(1)}%</span></span>
-      <span><i class="hr-dot" style="background:var(--warn)"></i>现金 <b>¥${fmt(hrCash,0)}</b> · <span class="hr-pct">${hrCshPct.toFixed(1)}%</span></span>
-    </div>
-    ${railRiskBlock}
+    ${mergedBlock}
   </div>` : `
   <div class="hold-ratio">
     <div class="hr-ttl">持仓占比<span class="hr-sub">持仓市值 ÷ 总资产</span></div>
     <div class="hint" style="margin-top:4px">建仓阶段 / 暂无持仓，持仓占比暂不适用。</div>
-    ${railRiskBlock}
+    ${renderRailRisk(g, sm)}
   </div>`;
   const tf = g._tf || (g._tf={type:'all',range:'all'});
   const ftype = tf.type||'all';
