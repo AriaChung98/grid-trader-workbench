@@ -172,7 +172,7 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .ac-compact{display:flex;flex-direction:column;gap:12px;margin:2px 0 4px;position:relative}
 .ac-sum{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
 .ac-lbl{font-size:12px;color:var(--muted);letter-spacing:.02em}
-.ac-grand{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink)}
+.ac-grand{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink)}
 .ac-list{display:flex;flex-direction:column;gap:9px}
 .ac-item{display:flex;flex-direction:column;gap:5px;min-width:0}
 .ac-top{display:flex;align-items:center;gap:10px;min-width:0}
@@ -180,9 +180,9 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .ac-bar{display:flex;height:10px;border-radius:2px;overflow:hidden;background:var(--line);flex:0 0 auto}
 .ac-bar .mv{background:var(--down)}
 .ac-bar .csh{background:var(--warn)}
-.ac-val{margin-left:8px;width:136px;text-align:right;font-size:12.5px;font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap;flex:0 0 auto}
-.ac-num{font-size:11px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;flex:0 0 auto}
-.ac-num b{color:var(--ink);font-weight:600}
+.ac-val{margin-left:8px;width:136px;text-align:right;font-size:11px;font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap;flex:0 0 auto}
+.ac-num{font-size:10.5px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;flex:0 0 auto}
+.ac-num b{color:var(--ink);font-weight:500}
 .ac-legend{display:flex;align-items:center;gap:16px;font-size:12px;color:var(--muted);flex-wrap:wrap}
 .ac-dot{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:middle}
 /* 资产构成 · 移动端可左右拖动查看（防窄屏裁切右侧¥值与占比） */
@@ -190,7 +190,7 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .ac-scroll .ac-list{width:100%}
 .ac-hint{display:none}
 @media (max-width:760px){
-  .ac-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;overflow-y:hidden;cursor:grab;touch-action:pan-y}
+  .ac-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;overflow-y:hidden;cursor:grab}
   .ac-scroll .ac-list{width:max-content;min-width:100%}
   .ac-scroll.grabbing{cursor:grabbing}
   .ac-scroll.grabbing .ac-num,.ac-scroll.grabbing .ac-top{-webkit-user-select:none;user-select:none}
@@ -4500,7 +4500,7 @@ function pfAssetsChartHTML(pf){
     if(x.isCash){
       return `<div class="ac-item">
       <div class="ac-top">
-        <span class="ac-nm" style="font-size:13px;color:var(--muted)">${esc(x.name)}</span>
+        <span class="ac-nm" style="font-size:12px;color:var(--muted)">${esc(x.name)}</span>
         <span class="ac-bar" style="width:${w}px"><i class="csh" style="width:100%"></i></span>
         <span class="ac-val">¥${fmt(x.total,0)} · ${pctTxt}</span>
       </div>
@@ -4511,7 +4511,7 @@ function pfAssetsChartHTML(pf){
     const holdTxt=mvp>0? mvp.toFixed(1)+"%" : "0%";
     return `<div class="ac-item">
       <div class="ac-top">
-        <span class="ac-nm" style="font-size:${fitFontSize(x.name,150,13)}px">${esc(x.name)}</span>
+        <span class="ac-nm" style="font-size:${fitFontSize(x.name,150,12)}px">${esc(x.name)}</span>
         <span class="ac-bar" style="width:${w}px"><i class="mv" style="width:${mvp}%"></i><i class="csh" style="width:${100-mvp}%"></i></span>
         <span class="ac-val">¥${fmt(x.total,0)} · ${pctTxt}</span>
       </div>
@@ -4661,6 +4661,7 @@ function bindAcScroll(){
     el.dataset.dragbound='1';
     let down=false, startX=0, startLeft=0, moved=0;
     el.addEventListener('pointerdown', e=>{
+      if(e.pointerType!=='mouse') return;   // 触摸/笔交给浏览器原生横向滑动（更顺滑）
       if(el.scrollWidth<=el.clientWidth+1) return;
       down=true; moved=0; startX=e.clientX; startLeft=el.scrollLeft;
       try{ el.setPointerCapture(e.pointerId); }catch(_){}
