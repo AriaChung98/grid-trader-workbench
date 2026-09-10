@@ -728,7 +728,7 @@ function defaultState(){
     dailyVol:null, annVol:null,
     kline: demo.pricePath.map(x=>({date:x.date, close:x.close})) };
   demo.cond.history[0].note = "初始设置（来自 Excel 模板）";
-  return { grids:[demo], portfolios:[], activeId:null, view:"overview" };
+  return { grids:[demo], portfolios:[], activeId:null, view:"overview", dismissedTests:[] };
 }
 
 let _gid = 0;
@@ -824,7 +824,8 @@ function buildTestGrid3(){
 function ensureTestGrid(){
   try{
     const ensureOne=(id, buildFn, keyLocal, keyDismiss)=>{
-      if(localStorage.getItem(keyDismiss)) return;          // 该测试网格曾被用户删除 → 不再自动添加
+      // 该测试网格曾被用户删除 → 不再自动添加（本地标记 或 云端同步的 dismissedTests 任一命中即视为已删除）
+      if(localStorage.getItem(keyDismiss) || (state.dismissedTests||[]).includes(id)) return;
       /* 底仓(targetBaseCost 按"股"计)市值不得超过初始资金：否则为"元/股"单位错配等脏数据，需修正。
          注：targetBaseCost 全系统统一定义为"股"（calcPosCaps/recalcDerived/calcQtySug 均按股处理）。 */
       const baseCorrupt=(p)=> p && p.targetBaseCost>0 && p.basePrice>0 && p.initCapital>0
@@ -908,6 +909,21 @@ function cloudHeaders(){
   const c=cloudCfg();
   return { "apikey": c.anon, "Authorization":"Bearer "+c.anon, "Content-Type":"application/json", "Prefer":"return=representation" };
 }
+/* 带重试的 fetch：Supabase 免费项目长期不访问会暂停，恢复时首次请求常返回 401 / 网络错误，
+   延迟后重试一次即可成功（项目已唤醒）。tries 默认 2，仅对 401 与网络错误(ret status 0)重试。 */
+function cfetch(url, opts, tries){
+  tries = (tries==null)?2:tries;
+  return fetch(url, opts).then(r=>{
+    if(!r.ok){
+      if(tries>1 && (r.status===401 || r.status===0)){ return new Promise(res=>setTimeout(res, 3000)).then(()=>cfetch(url, opts, tries-1)); }
+      throw new Error("HTTP "+r.status);
+    }
+    return r;
+  }).catch(err=>{
+    if(tries>1){ return new Promise(res=>setTimeout(res, 3000)).then(()=>cfetch(url, opts, tries-1)); }
+    throw err;
+  });
+}
 /* 上传整份状态到 Supabase 表 gridtrader（id 固定 'app'，按 updated_at 最后写入胜出） */
 function cloudPush(showToast){
   const c=cloudCfg(); if(!c) return Promise.resolve(false);
@@ -918,9 +934,9 @@ function cloudPush(showToast){
     ? Object.assign({}, state, { grids: state.grids.filter(g=>!g._noCloudSync) })
     : state;
   const body=JSON.stringify([{ id:"app", data:pushState, updated_at:now }]);
-  return fetch(`${c.url}/rest/v1/gridtrader?on_conflict=id`, {
+  return cfetch(`${c.url}/rest/v1/gridtrader?on_conflict=id`, {
     method:"POST", headers:Object.assign(cloudHeaders(),{ "Prefer":"resolution=merge-duplicates" }), body
-  }).then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status);
+  }, 2).then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status);
     if(showToast) toast("已同步到云端 · "+new Date().toLocaleTimeString());
     return true; })
    .catch(err=>{ if(showToast) toast("云端同步失败："+err.message); return false; });
@@ -931,7 +947,7 @@ function saveLocal(){
 /* 从云端拉取最新状态（云端更新时间更新则覆盖本地，最后写入胜出）。force=true 时忽略时间比较、强制以云端覆盖本地（手动"拉取"用） */
 function cloudPull(force){
   const c=cloudCfg(); if(!c) return Promise.resolve(false);
-  return fetch(`${c.url}/rest/v1/gridtrader?id=eq.app&select=id,data,updated_at`, { headers:cloudHeaders() })
+  return cfetch(`${c.url}/rest/v1/gridtrader?id=eq.app&select=id,data,updated_at`, { headers:cloudHeaders() }, 2)
     .then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
     .then(rows=>{
       const row=(rows&&rows[0])?rows[0]:null;
@@ -5097,7 +5113,10 @@ function delGrid(id){
   const inPfs=pfList().filter(p=>(p.members||[]).some(m=>m.gridId===id));
   const pfNote = inPfs.length? `<br><span style="color:#8A6A2F">该标的已在 ${inPfs.length} 个资产组合中——删除后会自动从这些组合中移除（组合本身保留）。</span>` : "";
   confirmModal("删除网格","将删除「"+esc(g.meta.name)+"（"+esc(g.meta.code)+"）」及其全部交易、条件单历史与行情。此操作不可逆！"+pfNote,()=>{
-    if(g._testGrid){ try{ if(id===TEST_GRID_ID){ localStorage.setItem(KEY_TESTDISMISS,"1"); localStorage.removeItem(KEY_TESTGRID); } else if(id===TEST_GRID2_ID){ localStorage.setItem(KEY_TESTDISMISS2,"1"); localStorage.removeItem(KEY_TESTGRID2); } else { localStorage.setItem(KEY_TESTDISMISS3,"1"); localStorage.removeItem(KEY_TESTGRID3); } }catch(e){} } // 删除任一测试网格后不再自动添加（按 id 区分）
+    if(g._testGrid){ try{ if(id===TEST_GRID_ID){ localStorage.setItem(KEY_TESTDISMISS,"1"); localStorage.removeItem(KEY_TESTGRID); } else if(id===TEST_GRID2_ID){ localStorage.setItem(KEY_TESTDISMISS2,"1"); localStorage.removeItem(KEY_TESTGRID2); } else { localStorage.setItem(KEY_TESTDISMISS3,"1"); localStorage.removeItem(KEY_TESTGRID3); }
+      // 把已删除的测试网格 id 纳入 state.dismissedTests（随 save 上云，使删除可跨设备生效）
+      state.dismissedTests = state.dismissedTests||[]; if(!state.dismissedTests.includes(id)) state.dismissedTests.push(id);
+    }catch(e){} } // 删除任一测试网格后不再自动添加（按 id 区分）
     state.grids=state.grids.filter(x=>x.id!==id);
     /* 从所有已保存组合与草稿中摘除该成员（组合本身保留） */
     state.portfolios.forEach(p=>{ p.members=(p.members||[]).filter(m=>m.gridId!==id); });
@@ -5565,7 +5584,19 @@ render();
 try{ if(!localStorage.getItem(KEY_CLOUD)){ setCloudCfg(DEFAULT_CLOUD); } }catch(e){}
 // 打开时先从云端拉取最新数据（若已启用云端同步）；仅拉取、不回推，避免用空白/默认本地状态覆盖云端
 if(cloudCfg()){
-  cloudPull().finally(()=>{ try{ ensureTestGrid(); }catch(e){} maybeSnapshot(); });
+  cloudPull().finally(()=>{
+    // 拉取后：把本机已 dismiss 的测试网格 id 合并进 state.dismissedTests（兼容旧版仅存本地的标记），
+    // 若确有新增则静默回推云端，使"删除测试网格"在手机/电脑多端一致生效
+    try{
+      let changed=false;
+      [[KEY_TESTDISMISS,TEST_GRID_ID],[KEY_TESTDISMISS2,TEST_GRID2_ID],[KEY_TESTDISMISS3,TEST_GRID3_ID]].forEach(([k,id])=>{
+        if(localStorage.getItem(k)){ state.dismissedTests=state.dismissedTests||[]; if(!state.dismissedTests.includes(id)){ state.dismissedTests.push(id); changed=true; } }
+      });
+      if(changed && !state._pristine) cloudPush(false);
+    }catch(e){}
+    try{ ensureTestGrid(); }catch(e){}
+    maybeSnapshot();
+  });
 } else {
   ensureTestGrid();
 }
