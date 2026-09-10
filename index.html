@@ -58,6 +58,15 @@ h1{font-size:25px;font-weight:600;margin:5px 0 2px;letter-spacing:.01em;}
 .am-pill.off{background:#F7ECEA;color:#B23A2E;border:1px solid #ECCFC9}
 .band .ttl-sub{font-size:12px;letter-spacing:.02em;text-transform:none;color:var(--muted);font-weight:500}
 .band .row{display:grid;grid-template-columns:18px minmax(0,1fr);gap:11px;align-items:start;font-size:14px;line-height:1.55}
+/* 详情页浮空标的标识条：滚动时常驻视口顶部，标明当前标的（及所属资产组合） */
+.detail-sticky{position:sticky;top:0;z-index:30;display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:11px 18px;background:var(--surface);border-bottom:1px solid var(--line);box-shadow:0 2px 10px rgba(0,0,0,.06);margin-bottom:6px}
+.detail-sticky .ds-left{display:flex;align-items:center;gap:10px;min-width:0}
+.detail-sticky .ds-code{font-size:12px;font-weight:600;letter-spacing:.04em;color:var(--muted);background:var(--line);padding:2px 8px;border-radius:3px;white-space:nowrap}
+.detail-sticky .ds-name{font-size:18px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.detail-sticky .ds-pf{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto}
+.detail-sticky .ds-pf-lbl{font-size:11px;color:var(--muted);letter-spacing:.02em;white-space:nowrap}
+.detail-sticky .ds-pf-tag{font-size:12.5px;font-weight:600;color:#9A6B1F;background:#F3ECDD;border:1px solid #E2D4B8;border-radius:2px;padding:3px 9px;cursor:pointer;white-space:nowrap}
+.detail-sticky .ds-pf-tag:hover{background:#EBE0C8}
 .band .row svg{width:16px;height:16px;margin-top:2px}
 .band .row > div{color:var(--ink);min-width:0}
 .band .row > div:only-child{grid-column:1 / -1}
@@ -3742,6 +3751,18 @@ function renderDetail(g){
   const startDays = isStopped(g) ? Math.max(0, daysBetween(startDay, g.stop.date)) : Math.max(0, daysBetween(startDay, todayISO()));   // 停止网格时天数冻结为 停止日 − 启动日
   const band = renderBandGrid(g, sm, (g.trades.length>0? holdShares : null));
 
+  // 浮空标的标识条（滚动时常驻视口顶部）：标的代码+名称+当前档位；若属于资产组合则列出组合名（可点击跳转）
+  const pfsOfGrid = pfList().filter(p=> (p.members||[]).some(m=>m.gridId===g.id));
+  const stickyBar = `
+  <div class="detail-sticky">
+    <div class="ds-left">
+      <span class="ds-code">${g.meta.code}</span>
+      <span class="ds-name">${g.meta.name}</span>
+      ${currentCellChip(g,sm)}
+    </div>
+    ${pfsOfGrid.length? `<div class="ds-pf"><span class="ds-pf-lbl">所属组合</span>${pfsOfGrid.map(p=>`<button class="ds-pf-tag" onclick="state._pfFrom='${g.id}';openPf('${p.id}')">${p.name}</button>`).join("")}</div>`:""}
+  </div>`;
+
   // 持仓占比 + 穿轨风险 合并为「持仓-网格耦合」单图（价格轴共享：价格越往下格→买入越多→持仓占比越高）
   const hrMv = sm.gridPos * sm.cur;
   const hrTotal = sm.totalAssets || 0;
@@ -3850,6 +3871,7 @@ function renderDetail(g){
     </div>`;
 
   return `
+  ${stickyBar}
   ${band}
 
   <section class="section">
