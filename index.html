@@ -39,6 +39,10 @@ h1{font-size:25px;font-weight:600;margin:5px 0 2px;letter-spacing:.01em;}
 .btn.primary:hover{opacity:.88}
 .btn.danger{border-color:var(--up);color:var(--up)}
 .btn.danger:hover{background:var(--up);color:#fff}
+/* 轻量「确定 / 已备份」消隐按钮：浅绿软胶囊，不抢眼、不突兀 */
+.btn.ack{background:rgba(46,122,70,.10);border:1px solid rgba(46,122,70,.22);color:#3C7A46;border-radius:14px;min-height:30px;padding:0 12px;font-size:11.5px;letter-spacing:.02em;box-shadow:none;margin-left:10px}
+.btn.ack:hover{background:rgba(46,122,70,.16);color:#2E6038}
+.btn.ack svg{width:13px;height:13px}
 .btn.lock{border-color:var(--lock);color:var(--lock)}
 .btn.lock:hover{background:var(--lock);color:#fff}
 
@@ -579,17 +583,18 @@ tbody tr:hover{background:#FBFAF7}
 .card-body .scroll{margin-top:0}
 @media(max-width:680px){.rb-head{grid-template-columns:1fr 1fr}.rb-head .rbh{padding:14px 14px}.rb-head .v{font-size:20px}.rb-head .subs{margin-top:9px;padding-top:9px;gap:5px}.rb-head .subs>div{font-size:11.5px}}
 /* 浮动「刷新行情」按钮：固定定位，滚动到任意位置都可见、可随时按 */
-.fab-stack{position:fixed;right:20px;bottom:calc(20px + env(safe-area-inset-bottom));z-index:40;display:flex;flex-direction:column;align-items:flex-end;gap:12px}
-.fab-refresh{display:inline-flex;align-items:center;gap:8px;min-height:50px;padding:0 18px;border-radius:28px;
+.fab-stack{position:fixed;right:20px;bottom:calc(20px + env(safe-area-inset-bottom));z-index:40;display:flex;flex-direction:column;align-items:stretch;gap:12px;width:118px}
+.fab-refresh{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:50px;padding:0 16px;border-radius:28px;width:100%;box-sizing:border-box;
   background:var(--ink);color:#fff;border:1px solid var(--ink);box-shadow:0 6px 20px rgba(20,18,15,.30);
   font-size:13.5px;letter-spacing:.04em;cursor:pointer;transition:opacity .15s, transform .1s}
+.fab-back{font-size:11.5px;letter-spacing:.02em}
 .fab-refresh:hover{opacity:.9}
 .fab-refresh:active{transform:scale(.97)}
 .fab-refresh svg{width:17px;height:17px;flex:0 0 auto}
 .fab-refresh.spin svg{animation:fabspin .9s linear infinite}
 @keyframes fabspin{to{transform:rotate(360deg)}}
-@media(max-width:760px){ .fab-stack{right:14px;bottom:calc(14px + env(safe-area-inset-bottom))} .fab-refresh{padding:0 16px;min-height:48px} }
-@media(max-width:380px){ .fab-refresh .txt{display:none} .fab-refresh{padding:0 14px} }
+@media(max-width:760px){ .fab-stack{right:14px;bottom:calc(14px + env(safe-area-inset-bottom));width:110px} .fab-refresh{padding:0 14px;min-height:48px} }
+@media(max-width:380px){ .fab-stack{width:auto} .fab-refresh{width:auto;padding:0 14px} .fab-refresh .txt{display:none} }
 </style>
 </head>
 <body>
@@ -599,7 +604,7 @@ tbody tr:hover{background:#FBFAF7}
 </div>
 
 <div class="fab-stack">
-  <button class="fab-refresh" id="fabBack" onclick="fabBack()" aria-label="返回上一页" style="display:none">
+  <button class="fab-refresh fab-back" id="fabBack" onclick="fabBack()" aria-label="返回上一页" style="display:none">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg><span class="txt">返回上一页</span>
   </button>
   <button class="fab-refresh" id="fabRefresh" onclick="fabRefresh()" aria-label="刷新行情">
@@ -3731,7 +3736,7 @@ function renderBandGlobal(sums){
     const detailRows = autoTradesAll.map(({g,t})=>`<div class="auto-rec-line"><span class="nm">「${g.meta.name}」</span> <span class="tp-${t.type==='买入'?'buy':'sell'}">${t.type}</span> ${fmt(t.qty,0)}股 @¥${fmt(t.trigger,3)}</div>`).join('');
     items.unshift(`<span class="tag ok">已自动录入</span> <span class="auto-rec-pop" tabindex="0" onclick="this.classList.toggle('open')">今日已自动录入 <b>${autoTradesAll.length}</b> 笔成交（条件单触发）<span class="auto-rec-tip"><div class="auto-rec-h">今日自动录入明细（${autoTradesAll.length} 笔）</div>${detailRows}</span></span>`);
   }
-  if(totalTrades>=30 && !ackGet("bak:global")) items.push(`<span class="tag info">备份提醒</span> 已累计 ${totalTrades} 笔交易，建议导出 JSON 备份。<button class="btn sm" style="margin-left:10px" onclick="ackBand('bak:global')">已备份</button>`);
+  if(totalTrades>=30 && !ackGet("bak:global")) items.push(`<span class="tag info">备份提醒</span> 已累计 ${totalTrades} 笔交易，建议导出 JSON 备份。${ackBtn("bak:global","已备份")}`);
   sums.forEach(({g,sm})=>{
     const c=g.cond.params, gl=gridLevels(c), cur=sm.cur;
     const gItems=[];
@@ -3745,7 +3750,7 @@ function renderBandGlobal(sums){
       if(todaysGrid.length>0){
         const dirTxt = dirsTxt? `（今日触发网格·${dirsTxt}）` : '';
         const ackDone="done:"+g.id+":"+todayISO();
-        if(!ackGet(ackDone)) push(`<span class="tag ok">${g.meta.code} 今日已处理</span> 今日已录入 ${todaysGrid.length} 笔成交${dirTxt}，无需重复录入。<button class="btn sm" style="margin-left:10px" onclick="ackBand('${ackDone}')">确定</button>`);
+        if(!ackGet(ackDone)) push(`<span class="tag ok">${g.meta.code} 今日已处理</span> 今日已录入 ${todaysGrid.length} 笔成交${dirTxt}，无需重复录入。${ackBtn(ackDone,"确定")}`);
       } else if(trig.triggered){
         const ptxt = trig.sides.includes('buy') ? `下个买点 ¥${fmt(trig.buyNext,3)}` : `下个卖点 ¥${fmt(trig.sellNext,3)}`;
         push(`<span class="tag urgent">${g.meta.code} 已触发网格·${dirsTxt}</span> 当前价 ¥${fmt(cur,3)} 已触及${ptxt}，请及时录入今日${trig.sides[0]==='buy'?'买入':'卖出'}成交。`);
@@ -4244,6 +4249,10 @@ function ackSet(id){
   render();
 }
 function ackBand(id){ ackSet(id); }
+/* 轻量消隐按钮（带勾选图标），用于「今日已处理·确定」「备份提醒·已备份」 */
+function ackBtn(id, label){
+  return `<button class="btn ack" onclick="ackBand('${id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6L9 17l-5-5"/></svg>${label}</button>`;
+}
 
 function renderBandGrid(g, sm, posHold){
   const cur=sm.cur, c=g.cond.params, gl=gridLevels(c);
@@ -4284,7 +4293,7 @@ function renderBandGrid(g, sm, posHold){
   if(todaysGrid.length>0){
     const dirTxt = dirsTxt? `（今日触发网格·${dirsTxt}，按最新基准价 ¥${fmt(trig.base,3)} 计算）` : '';
     const ackDone="done:"+g.id+":"+todayISO();
-    if(!ackGet(ackDone)) items.push(`<span class="tag ok">今日已处理</span> 今日已录入 <b>${todaysGrid.length}</b> 笔成交${dirTxt}，无需重复录入。<button class="btn sm" style="margin-left:10px" onclick="ackBand('${ackDone}')">确定</button>`);
+    if(!ackGet(ackDone)) items.push(`<span class="tag ok">今日已处理</span> 今日已录入 <b>${todaysGrid.length}</b> 笔成交${dirTxt}，无需重复录入。${ackBtn(ackDone,"确定")}`);
   } else if(trig.triggered){
     const parts=[];
     if(trig.sides.includes('buy')) parts.push(`下个买点 ¥${fmt(trig.buyNext,3)}`);
