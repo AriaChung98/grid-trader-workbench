@@ -579,8 +579,8 @@ tbody tr:hover{background:#FBFAF7}
 .card-body .scroll{margin-top:0}
 @media(max-width:680px){.rb-head{grid-template-columns:1fr 1fr}.rb-head .rbh{padding:14px 14px}.rb-head .v{font-size:20px}.rb-head .subs{margin-top:9px;padding-top:9px;gap:5px}.rb-head .subs>div{font-size:11.5px}}
 /* 浮动「刷新行情」按钮：固定定位，滚动到任意位置都可见、可随时按 */
-.fab-refresh{position:fixed;right:20px;bottom:calc(20px + env(safe-area-inset-bottom));z-index:40;
-  display:inline-flex;align-items:center;gap:8px;min-height:50px;padding:0 18px;border-radius:28px;
+.fab-stack{position:fixed;right:20px;bottom:calc(20px + env(safe-area-inset-bottom));z-index:40;display:flex;flex-direction:column;align-items:flex-end;gap:12px}
+.fab-refresh{display:inline-flex;align-items:center;gap:8px;min-height:50px;padding:0 18px;border-radius:28px;
   background:var(--ink);color:#fff;border:1px solid var(--ink);box-shadow:0 6px 20px rgba(20,18,15,.30);
   font-size:13.5px;letter-spacing:.04em;cursor:pointer;transition:opacity .15s, transform .1s}
 .fab-refresh:hover{opacity:.9}
@@ -588,7 +588,7 @@ tbody tr:hover{background:#FBFAF7}
 .fab-refresh svg{width:17px;height:17px;flex:0 0 auto}
 .fab-refresh.spin svg{animation:fabspin .9s linear infinite}
 @keyframes fabspin{to{transform:rotate(360deg)}}
-@media(max-width:760px){ .fab-refresh{right:14px;bottom:calc(14px + env(safe-area-inset-bottom));padding:0 16px;min-height:48px} }
+@media(max-width:760px){ .fab-stack{right:14px;bottom:calc(14px + env(safe-area-inset-bottom))} .fab-refresh{padding:0 16px;min-height:48px} }
 @media(max-width:380px){ .fab-refresh .txt{display:none} .fab-refresh{padding:0 14px} }
 </style>
 </head>
@@ -598,9 +598,14 @@ tbody tr:hover{background:#FBFAF7}
   <div id="view"></div>
 </div>
 
-<button class="fab-refresh" id="fabRefresh" onclick="fabRefresh()" aria-label="刷新行情">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/></svg><span class="txt">刷新行情</span>
-</button>
+<div class="fab-stack">
+  <button class="fab-refresh" id="fabBack" onclick="fabBack()" aria-label="返回上一页" style="display:none">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg><span class="txt">返回上一页</span>
+  </button>
+  <button class="fab-refresh" id="fabRefresh" onclick="fabRefresh()" aria-label="刷新行情">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/></svg><span class="txt">刷新行情</span>
+  </button>
+</div>
 
 <div class="modal" id="modal"><div class="box">
   <h3 id="mTitle"></h3><div id="mBody"></div>
@@ -3497,6 +3502,7 @@ function renderPortfolioSection(){ return ""; }   // 组合区已内联进 rende
 /* ============ 渲染主调度 ============ */
 function render(){
   renderHeader();
+  syncFabBack();
   const v=$("view");
   if(state.creating){ v.innerHTML = renderNewGrid(); bindNewGrid(); return; }
   if(state.activePfId){ const pf=getPf(state.activePfId); if(pf){
@@ -5368,6 +5374,12 @@ function fabRefresh(){
   else { p = refreshAllMarket(false); }
   if(p && typeof p.then==="function") p.then(stop).catch(stop);
   else setTimeout(stop, 800);
+}
+/* 浮动「返回上一页」：仅在详情/组合/新建页显示，回总览（含组合内跳标的返回） */
+function fabBack(){ back(); }
+function syncFabBack(){
+  const fb=document.getElementById("fabBack");
+  if(fb) fb.style.display = (state.activeId||state.creating||state.activePfId) ? "" : "none";
 }
 
 /* ============ 导出 / 导入 / 清空 ============ */
