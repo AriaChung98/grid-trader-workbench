@@ -39,10 +39,10 @@ h1{font-size:25px;font-weight:600;margin:5px 0 2px;letter-spacing:.01em;}
 .btn.primary:hover{opacity:.88}
 .btn.danger{border-color:var(--up);color:var(--up)}
 .btn.danger:hover{background:var(--up);color:#fff}
-/* 轻量「确定 / 已备份」消隐按钮：浅绿软胶囊，不抢眼、不突兀 */
-.btn.ack{background:rgba(46,122,70,.10);border:1px solid rgba(46,122,70,.22);color:#3C7A46;border-radius:14px;min-height:30px;padding:0 12px;font-size:11.5px;letter-spacing:.02em;box-shadow:none;margin-left:10px}
-.btn.ack:hover{background:rgba(46,122,70,.16);color:#2E6038}
-.btn.ack svg{width:13px;height:13px}
+/* 轻量「确定 / 已备份」消隐按钮：贴近文字的内联小字（带勾），不占独立一行、不突兀 */
+.btn.ack{display:inline-flex;align-items:center;vertical-align:middle;gap:3px;background:rgba(46,122,70,.09);border:1px solid rgba(46,122,70,.20);color:#3C7A46;border-radius:11px;min-height:0;padding:1px 9px;font-size:11px;letter-spacing:.02em;line-height:1.5;box-shadow:none;margin-left:6px;white-space:nowrap;cursor:pointer}
+.btn.ack:hover{background:rgba(46,122,70,.15);color:#2E6038}
+.btn.ack svg{width:12px;height:12px;flex:0 0 auto}
 .btn.lock{border-color:var(--lock);color:var(--lock)}
 .btn.lock:hover{background:var(--lock);color:#fff}
 
@@ -583,17 +583,18 @@ tbody tr:hover{background:#FBFAF7}
 .card-body .scroll{margin-top:0}
 @media(max-width:680px){.rb-head{grid-template-columns:1fr 1fr}.rb-head .rbh{padding:14px 14px}.rb-head .v{font-size:20px}.rb-head .subs{margin-top:9px;padding-top:9px;gap:5px}.rb-head .subs>div{font-size:11.5px}}
 /* 浮动「刷新行情」按钮：固定定位，滚动到任意位置都可见、可随时按 */
-.fab-stack{position:fixed;right:20px;bottom:calc(20px + env(safe-area-inset-bottom));z-index:40;display:flex;flex-direction:column;align-items:stretch;gap:12px;width:118px}
-.fab-refresh{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:50px;padding:0 16px;border-radius:28px;width:100%;box-sizing:border-box;
+.fab-stack{position:fixed;right:20px;bottom:calc(20px + env(safe-area-inset-bottom));z-index:40;display:flex;flex-direction:column;align-items:stretch;gap:12px;width:128px}
+.fab-refresh{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:50px;padding:0 16px;border-radius:28px;width:100%;box-sizing:border-box;white-space:nowrap;
   background:var(--ink);color:#fff;border:1px solid var(--ink);box-shadow:0 6px 20px rgba(20,18,15,.30);
   font-size:13.5px;letter-spacing:.04em;cursor:pointer;transition:opacity .15s, transform .1s}
-.fab-back{font-size:11.5px;letter-spacing:.02em}
+.fab-refresh .txt{white-space:nowrap}
+.fab-back{font-size:11px;letter-spacing:.02em}
 .fab-refresh:hover{opacity:.9}
 .fab-refresh:active{transform:scale(.97)}
-.fab-refresh svg{width:17px;height:17px;flex:0 0 auto}
+.fab-refresh svg{width:16px;height:16px;flex:0 0 auto}
 .fab-refresh.spin svg{animation:fabspin .9s linear infinite}
 @keyframes fabspin{to{transform:rotate(360deg)}}
-@media(max-width:760px){ .fab-stack{right:14px;bottom:calc(14px + env(safe-area-inset-bottom));width:110px} .fab-refresh{padding:0 14px;min-height:48px} }
+@media(max-width:760px){ .fab-stack{right:14px;bottom:calc(14px + env(safe-area-inset-bottom));width:124px} .fab-refresh{padding:0 14px;min-height:48px} }
 @media(max-width:380px){ .fab-stack{width:auto} .fab-refresh{width:auto;padding:0 14px} .fab-refresh .txt{display:none} }
 </style>
 </head>
