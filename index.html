@@ -190,12 +190,34 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .ac-scroll .ac-list{width:100%}
 .ac-hint{display:none}
 @media (max-width:760px){
+  /* 资产构成 · 横向滑动 */
   .ac-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;overflow-y:hidden;cursor:grab}
   .ac-scroll .ac-list{width:max-content;min-width:100%}
   .ac-scroll.grabbing{cursor:grabbing}
   .ac-scroll.grabbing .ac-num,.ac-scroll.grabbing .ac-top{-webkit-user-select:none;user-select:none}
   .ac-hint{display:block;position:absolute;top:2px;right:6px;z-index:3;font-size:10.5px;color:var(--muted);background:rgba(255,255,255,.85);border:1px solid var(--line);border-radius:9px;padding:1px 8px;pointer-events:none;transition:opacity .3s;white-space:nowrap}
   .ac-compact.ac-scrolled .ac-hint{opacity:0}
+  /* 组合详情 · 移动端全局收窄字号（KPI / 总览行 / 资产构成 / 成员行） */
+  .kpi .v{font-size:18px}
+  .kpi .l{font-size:11px}
+  .kpi .s{font-size:10.5px}
+  .kpi{padding:10px 12px}
+  .lab .t{font-size:13px}
+  .totals .v{font-size:16px}
+  .ovrow .assets,.ovrow .profit{font-size:14px}
+  .ovrow .sym{font-size:13px}
+  .ovrow .cond{font-size:11.5px}
+  .ovrow{padding:10px 12px;gap:8px 10px}
+  /* 资产构成正文进一步收窄 */
+  .ac-grand{font-size:14px}
+  .ac-val{font-size:10.5px;width:120px}
+  .ac-num{font-size:10px}
+  .ac-nm{font-size:11.5px}
+  .ac-lbl{font-size:11px}
+  .ac-bar{height:8px}
+  .ac-item{gap:4px}
+  .ac-top{gap:8px}
+  .card-body{padding:12px}
 }
 /* 单标的详情页 · 持仓占比可视化 */
 .hold-ratio{margin-top:14px;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
