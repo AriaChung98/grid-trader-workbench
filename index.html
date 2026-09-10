@@ -169,7 +169,7 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .sym-name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .tip-anchor{color:var(--muted);border-bottom:1px dotted var(--muted);cursor:help;font-size:11px;margin-left:4px}
 /* 资产构成图表（贴合工作台配色） */
-.ac-compact{display:flex;flex-direction:column;gap:12px;margin:2px 0 4px}
+.ac-compact{display:flex;flex-direction:column;gap:12px;margin:2px 0 4px;position:relative}
 .ac-sum{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
 .ac-lbl{font-size:12px;color:var(--muted);letter-spacing:.02em}
 .ac-grand{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink)}
@@ -185,6 +185,18 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .ac-num b{color:var(--ink);font-weight:600}
 .ac-legend{display:flex;align-items:center;gap:16px;font-size:12px;color:var(--muted);flex-wrap:wrap}
 .ac-dot{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:middle}
+/* 资产构成 · 移动端可左右拖动查看（防窄屏裁切右侧¥值与占比） */
+.ac-scroll{position:relative;overflow:hidden}
+.ac-scroll .ac-list{width:100%}
+.ac-hint{display:none}
+@media (max-width:760px){
+  .ac-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;overflow-y:hidden;cursor:grab;touch-action:pan-y}
+  .ac-scroll .ac-list{width:max-content;min-width:100%}
+  .ac-scroll.grabbing{cursor:grabbing}
+  .ac-scroll.grabbing .ac-num,.ac-scroll.grabbing .ac-top{-webkit-user-select:none;user-select:none}
+  .ac-hint{display:block;position:absolute;top:2px;right:6px;z-index:3;font-size:10.5px;color:var(--muted);background:rgba(255,255,255,.85);border:1px solid var(--line);border-radius:9px;padding:1px 8px;pointer-events:none;transition:opacity .3s;white-space:nowrap}
+  .ac-compact.ac-scrolled .ac-hint{opacity:0}
+}
 /* 单标的详情页 · 持仓占比可视化 */
 .hold-ratio{margin-top:14px;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
 .hold-ratio .hr-ttl{font-size:13px;font-weight:600;color:var(--ink);margin-bottom:9px}
@@ -3530,7 +3542,7 @@ function render(){
   if(state.activePfId){ const pf=getPf(state.activePfId); if(pf){
       /* 编辑模式：草稿存在且针对当前组合 → 渲染详情页内编辑视图（含暂停网格提醒） */
       if(state.pfDraft && state.pfDraft.id===state.activePfId){ v.innerHTML = renderPortfolioEdit(pf); return; }
-      v.innerHTML = renderPortfolioDetail(pf); bindPortfolioDetail(pf); return; } state.activePfId=null; }
+      v.innerHTML = renderPortfolioDetail(pf); bindPortfolioDetail(pf); bindAcScroll(); return; } state.activePfId=null; }
   if(state.activeId){ v.innerHTML = renderDetail(activeGrid()); bindDetail(activeGrid()); return; }
   v.innerHTML = renderOverview(); bindOverview();
 }
@@ -4509,7 +4521,8 @@ function pfAssetsChartHTML(pf){
   return `<div class="card"><div class="card-body">
     <div class="ac-compact">
       <div class="ac-sum"><span class="ac-lbl">资产构成 · 各成员持仓市值 + 现金${freeCash>0? "（含未分配流动现金 ¥"+fmt(freeCash,0)+"）":""}</span><span class="ac-grand">¥${fmt(grand,0)}</span></div>
-      <div class="ac-list">${items}</div>
+      <div class="ac-scroll"><div class="ac-list">${items}</div></div>
+      <div class="ac-hint">← 左右拖动查看完整内容 →</div>
       <div class="ac-legend"><span><i class="ac-dot" style="background:var(--down)"></i>持仓市值</span><span><i class="ac-dot" style="background:var(--warn)"></i>现有现金</span><span style="color:var(--muted)">条长 = 占组合总资产比例</span></div>
     </div>
   </div></div>`;
@@ -4641,6 +4654,30 @@ function renderPortfolioEdit(pf){
   </section>`;
 }
 function bindPortfolioDetail(){}
+/* 资产构成 · 移动端左右拖动查看（pointer 拖拽 + 滚动隐藏提示） */
+function bindAcScroll(){
+  document.querySelectorAll('.ac-scroll').forEach(el=>{
+    if(el.dataset.dragbound) return;
+    el.dataset.dragbound='1';
+    let down=false, startX=0, startLeft=0, moved=0;
+    el.addEventListener('pointerdown', e=>{
+      if(el.scrollWidth<=el.clientWidth+1) return;
+      down=true; moved=0; startX=e.clientX; startLeft=el.scrollLeft;
+      try{ el.setPointerCapture(e.pointerId); }catch(_){}
+      el.classList.add('grabbing');
+    });
+    el.addEventListener('pointermove', e=>{
+      if(!down) return;
+      const dx=e.clientX-startX;
+      if(Math.abs(dx)>2) moved=Math.abs(dx);
+      el.scrollLeft=startLeft-dx;
+    });
+    const end=()=>{ down=false; el.classList.remove('grabbing'); moved=0; };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+    el.addEventListener('scroll', ()=>{ const c=el.closest('.ac-compact'); if(c && el.scrollLeft>4) c.classList.add('ac-scrolled'); }, {passive:true});
+  });
+}
 function startNew(){ state.creating={ step:"input", code:"", name:"", price:null, market:null, draftCond:null, recommend:null }; render(); }
 function cancelNew(){ state.creating=null; render(); }
 function cancelNewConfirm(){
