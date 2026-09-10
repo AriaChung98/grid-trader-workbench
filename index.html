@@ -49,8 +49,13 @@ h1{font-size:25px;font-weight:600;margin:5px 0 2px;letter-spacing:.01em;}
 
 .band{background:var(--band);border:1px solid var(--line);padding:16px 18px;margin-bottom:6px;display:flex;flex-direction:column;gap:11px;border-radius:3px}
 .band .ttl{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--warn);font-weight:600}
-.band-toggle{font-size:11px;letter-spacing:.02em;text-transform:none;font-weight:500;padding:3px 9px;border-radius:2px;border:1px solid var(--bandline);background:#fff;color:var(--warn);cursor:pointer;margin-left:auto}
+.band .ttl-ctrls{display:flex;align-items:center;gap:8px}
+.band-toggle{font-size:11px;letter-spacing:.02em;text-transform:none;font-weight:500;padding:3px 9px;border-radius:2px;border:1px solid var(--bandline);background:#fff;color:var(--warn);cursor:pointer}
 .band-toggle:hover{background:var(--band)}
+.band .ttl-ctrls .band-toggle{margin-left:0}
+.am-pill{font-size:11px;letter-spacing:.02em;text-transform:none;font-weight:600;padding:2px 9px;border-radius:10px;white-space:nowrap}
+.am-pill.on{background:#E7F2E7;color:#3C7A3C;border:1px solid #C9E2C9}
+.am-pill.off{background:#F7ECEA;color:#B23A2E;border:1px solid #ECCFC9}
 .band .ttl-sub{font-size:12px;letter-spacing:.02em;text-transform:none;color:var(--muted);font-weight:500}
 .band .row{display:grid;grid-template-columns:18px minmax(0,1fr);gap:11px;align-items:start;font-size:14px;line-height:1.55}
 .band .row svg{width:16px;height:16px;margin-top:2px}
@@ -3722,7 +3727,7 @@ function renderBandGlobal(sums){
     gItems.forEach(t=>items.push(t));
   });
   if(items.length===0) items.push(`<span class="tag ok">运行平稳</span> 暂无网格触发越界，各标的均处于区间内有条件单运行中。`);
-  return `<div class="band"><div class="ttl"><span>今天要处理</span><button class="band-toggle" onclick="toggleAutoMonitor()" title="条件单触发后自动录入成交（默认开启，点此切换）">自动录入 ${state._autoMonitor===false?'关':'开'}</button></div>${items.map(t=>`<div class="row">${icon}<div>${t}</div></div>`).join("")}</div>`;
+  return `<div class="band"><div class="ttl"><span>今天要处理</span><span class="ttl-ctrls"><span class="am-pill ${state._autoMonitor!==false?'on':'off'}">自动录入 ${state._autoMonitor!==false?'运行中':'已关闭'}</span><button class="band-toggle" onclick="runAutoMonitorNow()" title="立即扫描当日分时，触发即录入">立即巡检</button><button class="band-toggle" onclick="toggleAutoMonitor()" title="点此切换自动录入开关">${state._autoMonitor!==false?'关闭':'开启'}</button></span></div>${items.map(t=>`<div class="row">${icon}<div>${t}</div></div>`).join("")}</div>`;
 }
 
 /* ============ 详情 ============ */
@@ -5180,6 +5185,29 @@ function fetchTencentKline(code,start,end){
     document.head.appendChild(s);
   });
 }
+function fetchIntradayTX(code){
+  code=normalizeCode(code);
+  return new Promise((res,rej)=>{
+    const cb="mincb_"+Date.now();
+    const s=document.createElement("script");
+    const t=setTimeout(()=>{cleanup();rej(new Error("超时"));},8000);
+    const cleanup=()=>{clearTimeout(t); if(s.parentNode) s.parentNode.removeChild(s); try{delete window[cb];}catch(e){}};
+    s.onerror=()=>{cleanup();rej(new Error("网络错误"));};
+    window[cb]=function(d){ cleanup(); try{
+      const node=d&&d.data&&(d.data[code]||{});
+      const arr=(node.data&&node.data.data)||[];
+      if(!arr.length) return rej(new Error("无分时"));
+      const out=arr.map(x=>{ const a=String(x).split(" "); return {t:a[0], close:parseFloat(a[1])}; });
+      res(out);
+    }catch(e){ rej(e); } };
+    s.src=`https://web.ifzq.gtimg.cn/appstock/app/minute/query?_var=${cb}&code=${code}`;
+    document.head.appendChild(s);
+  });
+}
+/* 当日分时取数：东方财富直连（CORS，仅本机/同源可用）优先；失败或返回空 → 腾讯 JSONP 兜底（github.io 等跨域页面必走此路，否则拿不到分时、自动录入会被静默跳过） */
+function fetchIntraday(code){
+  return fetchIntradayEM(code).then(b=> (b&&b.length)? b : Promise.reject(new Error("空"))).catch(()=> fetchIntradayTX(code));
+}
 function fetchPrice(code){
   if(cloudCfg()) return fetchPriceProxy(code).catch(e=> Promise.reject(new Error("云端行情代理连接失败："+(e&&e.message||e)+"（可能你的网络无法访问 supabase.co）")));
   return fetchEMPrice(code).catch(()=> fetchTencentPrice(code));
@@ -5418,7 +5446,7 @@ function autoGridMonitor(){
   if(!targets.length) return;
   Promise.all(targets.map(g=>{
     const code=g.meta.code;
-    return Promise.all([ fetchMarket(code), fetchIntradayEM(code) ]).then(([m, bars])=>{
+    return Promise.all([ fetchMarket(code), fetchIntraday(code) ]).then(([m, bars])=>{
       if(!m || !(m.price>0)) return null;
       g.market=m;
       g.pricePath=m.kline.map(x=>({date:x.date, close:x.close}));
@@ -5430,7 +5458,15 @@ function autoGridMonitor(){
       const qty = Math.max(100, Math.round((g.cond.params.qtyPerTrade||0)/100)*100);  // 整手（100股倍数）
       // 当日分时路径；取不到分时则本 tick 跳过（避免用日K高低误录，下一 tick 有分时再判定）
       if(!(bars && bars.length)) return null;
-      const path = bars.map(b=>({high:b.high, low:b.low, close:b.close}));
+      // 路径：东方财富分时带 high/low；腾讯分时仅给每分钟收盘，这里用「前收~本收」重建当分钟高低，避免漏掉穿越
+      let prevDayClose=cur;
+      if(m.kline && m.kline.length){ const past=m.kline.filter(x=>x.date<today); if(past.length) prevDayClose=past[past.length-1].close; }
+      const path = bars.map(b=>({high:(b.high!=null?b.high:b.close), low:(b.low!=null?b.low:b.close), close:b.close}));
+      for(let i=0;i<path.length;i++){
+        const prev = i>0 ? path[i-1].close : prevDayClose;
+        path[i].high = Math.max(path[i].high, path[i].close, prev);
+        path[i].low  = Math.min(path[i].low,  path[i].close, prev);
+      }
       path.push({high:cur, low:cur, close:cur});     // 现价作为末点，参与判定
       // 成交驱动基准：近一次（非今日）成交价；无则初始基准价
       const prevDeals = g.trades.filter(t=>(t.type==="买入"||t.type==="卖出") && t.date<today)
@@ -5440,14 +5476,17 @@ function autoGridMonitor(){
       const EPS=1e-9;
       const seq=[];
       for(const bar of path){
-        const buyLine=base*(1-sp), sellLine=base*(1+sp);
-        if(bar.high>=sellLine-EPS && bar.low<=buyLine+EPS){
-          // 双向穿越（罕见）：按收盘方向先处理其一，本根不再处理第二次（防刷单）
-          if(bar.close>=base-EPS){ seq.push({type:"卖出", trigger:r3(sellLine)}); base=r3(sellLine); }
-          else { seq.push({type:"买入", trigger:r3(buyLine)}); base=r3(buyLine); }
-        } else if(bar.high>=sellLine-EPS){ seq.push({type:"卖出", trigger:r3(sellLine)}); base=r3(sellLine); }
-        else if(bar.low<=buyLine+EPS){ seq.push({type:"买入", trigger:r3(buyLine)}); base=r3(buyLine); }
-        // 单根最多一笔
+        let guard=0;
+        while(guard++ < 400){   // 单根内可能跨越多格（分钟级跳空），逐格步进，直至该根不再穿越
+          const buyLine=base*(1-sp), sellLine=base*(1+sp);
+          if(bar.high>=sellLine-EPS && bar.low<=buyLine+EPS){
+            // 双向穿越（罕见）：按收盘方向先处理其一，本根不再处理第二次（防刷单）
+            if(bar.close>=base-EPS){ seq.push({type:"卖出", trigger:r3(sellLine)}); base=r3(sellLine); }
+            else { seq.push({type:"买入", trigger:r3(buyLine)}); base=r3(buyLine); }
+          } else if(bar.high>=sellLine-EPS){ seq.push({type:"卖出", trigger:r3(sellLine)}); base=r3(sellLine); }
+          else if(bar.low<=buyLine+EPS){ seq.push({type:"买入", trigger:r3(buyLine)}); base=r3(buyLine); }
+          else break;
+        }
       }
       // 幂等合并：跳过今日已录入的同价同方向成交，仅增量新增（不删除历史成交）
       if(g._testGrid){
@@ -5479,6 +5518,11 @@ function toggleAutoMonitor(){
   state._autoMonitor = (state._autoMonitor===false)? true : false;
   save(); render();
   toast("条件单自动录入：" + (state._autoMonitor===false? "已关闭" : "已开启"));
+}
+function runAutoMonitorNow(){
+  if(state._autoMonitor===false){ toast("自动录入已关闭，先点「开启」"); return; }
+  toast("正在巡检当日分时…");
+  autoGridMonitor();
 }
 
 /* ============ 初始化 ============ */
