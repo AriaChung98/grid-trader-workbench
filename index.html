@@ -210,19 +210,24 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .cellchip.cell-ok{background:#E4F3EA;color:#2f6b4a}
 .cellchip.cell-warn{background:#FBF0D8;color:#8a5a10}
 .cellchip.cell-down{background:#F8D7D2;color:#B03021}
-/* 持仓-网格耦合（合并 持仓占比 + 穿轨风险 为一张共享价格轴的图） */
-.hold-ratio .hr-merged{margin-top:0}
-.hold-ratio .hr-merged .hr-mtitle{font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px}
-.hold-ratio .hr-merged .hr-msub{font-weight:400;color:var(--muted);font-size:11px;margin-left:7px}
-.hold-ratio .hr-merged .rr-track{margin:6px 0 2px}
-.hold-ratio .hr-merged .hr-prof{position:relative;height:48px;margin-top:9px;border-radius:7px;overflow:hidden;border:1px solid var(--line);background:linear-gradient(90deg,#F6E9E6 0%,#FBF3EB 50%,#E9F1E9 100%)}
-.hold-ratio .hr-merged .hr-prof-svg{position:absolute;inset:0;width:100%;height:100%;display:block}
-.hold-ratio .hr-merged .hr-prof-axis{position:absolute;left:0;right:0;bottom:2px;display:flex;justify-content:space-between;padding:0 5px;font-size:9.5px;color:var(--muted);pointer-events:none}
-.hold-ratio .hr-merged .hr-foot{display:flex;flex-wrap:wrap;gap:7px 14px;align-items:center;margin-top:9px;font-size:12px;color:var(--ink);line-height:1.5}
-.hold-ratio .hr-merged .hr-foot b{font-variant-numeric:tabular-nums}
-.hold-ratio .hr-merged .hr-pill{color:var(--muted)}
-.hold-ratio .hr-merged .hr-pill b{color:var(--down)}
-.hold-ratio .hr-merged .hr-cur{font-weight:600;color:var(--ink)}
+/* 持仓-网格耦合（真正合一的单图：同一价格轴，网格线=穿轨，红线面积=持仓占比，蓝点=当前占比） */
+.hr-combo{margin-top:0}
+.hr-combo .hr-mtitle{font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px}
+.hr-combo .hr-msub{font-weight:400;color:var(--muted);font-size:11px;margin-left:7px}
+.hr-combo-grid{display:grid;grid-template-columns:30px 1fr;gap:0 6px;align-items:stretch;margin-top:4px}
+.hr-yaxis{display:flex;flex-direction:column;justify-content:space-between;font-size:9.5px;color:var(--muted);text-align:right;line-height:1;padding:1px 0;font-variant-numeric:tabular-nums}
+.hr-plot{position:relative;height:152px;border:1px solid var(--line);border-radius:7px;overflow:hidden;background:linear-gradient(90deg,#F6E9E6 0%,#FBF3EB 50%,#E9F1E9 100%)}
+.hr-combo-svg{position:absolute;inset:0;width:100%;height:100%;display:block}
+.hr-ylab{position:absolute;left:5px;top:4px;font-size:9.5px;color:var(--muted);pointer-events:none}
+.hr-cur-pct{position:absolute;transform:translate(-50%,-135%);font-size:10.5px;font-weight:700;color:#1A56C4;background:#fff;border:1px solid #CBD7EA;border-radius:9px;padding:1px 6px;white-space:nowrap;pointer-events:none;font-variant-numeric:tabular-nums}
+.hr-xaxis{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted);margin-top:5px;font-variant-numeric:tabular-nums}
+.hr-curx{color:var(--ink);font-weight:600}
+.hr-foot{display:flex;flex-wrap:wrap;gap:7px 14px;align-items:center;margin-top:9px;font-size:12px;color:var(--ink);line-height:1.5}
+.hr-foot b{font-variant-numeric:tabular-nums}
+.hr-pill{color:var(--muted)}
+.hr-pill b{color:var(--down)}
+.hr-legend{display:flex;align-items:center;gap:14px;font-size:10.5px;color:var(--muted);flex-wrap:wrap;margin-top:8px}
+.hr-dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle}
 /* 条件单诊断 · 每回合手续费占比 */
 .cd-fee{background:var(--band);border:1px solid var(--bandline);border-radius:3px;padding:10px 12px;margin:10px 0}
 .cd-fee-h{font-size:12px;font-weight:600;color:var(--warn);margin-bottom:7px}
@@ -1268,27 +1273,30 @@ function renderHoldRailMerged(g, sm){
   const pctOf=(p)=>Math.max(0,Math.min(100,(p-dLo)/dSpan*100));
   const breached=(cur>=upper||cur<=lower);
   const lines=cell.lines;
+  /* —— 真正合一的单图：同一价格轴（X）同时承载「穿轨网格线」与「持仓占比剖面」 ——
+     · 竖向网格线 = 档位结构（基准/上下轨/中间档），即穿轨位置；
+     · 红色面积曲线 = 持仓占比（Y 轴 0%~100%），价格越往下格→买入越多→占比越高；
+     · 蓝色竖线 = 现价；蓝点 = 现价处对应的持仓占比（带数字标注）。 */
   const ticks=[];
   for(let i=0;i<lines.length;i++){
-    const k=lines[i].k, p=pctOf(lines[i].price);
-    if(k===-c.downGrids||k===c.upGrids) ticks.push(`<i class="rr-rail" style="left:${p}%"></i>`);
-    else if(k===0) ticks.push(`<i class="rr-base" style="left:${p}%"></i>`);
-    else ticks.push(`<i class="rr-tick" style="left:${p}%"></i>`);
+    const k=lines[i].k, p=pctOf(lines[i].price).toFixed(2);
+    if(k===-c.downGrids||k===c.upGrids) ticks.push(`<line x1="${p}" y1="0" x2="${p}" y2="100" stroke="#C0392B" stroke-width="1.8" vector-effect="non-scaling-stroke"/>`);
+    else if(k===0) ticks.push(`<line x1="${p}" y1="0" x2="${p}" y2="100" stroke="#8A6A2F" stroke-width="2" vector-effect="non-scaling-stroke"/>`);
+    else ticks.push(`<line x1="${p}" y1="0" x2="${p}" y2="100" stroke="#D8D2C6" stroke-width="0.8" vector-effect="non-scaling-stroke"/>`);
   }
   let cellHtml="", cellLow=cell.cellLow, cellHigh=cell.cellHigh, curLbl=cell.label;
-  if(cell.kj!==null){
-    const L=pctOf(cellLow), W=pctOf(cellHigh)-L;
-    cellHtml=`<i class="rr-cell" style="left:${L}%;width:${W}%"></i>`;
+  if(!breached && cell.kj!==null){
+    const L=pctOf(cellLow).toFixed(2), W=(pctOf(cellHigh)-pctOf(cellLow)).toFixed(2);
+    cellHtml=`<rect x="${L}" y="0" width="${W}" height="100" fill="rgba(26,86,196,.09)" stroke="#1A56C4" stroke-width="0.6" stroke-dasharray="2 2" vector-effect="non-scaling-stroke"/>`;
   }
   const curPct=pctOf(cur);
-  const trackCls=breached?"rr-breach":(cell.tone==="warn"?"rr-near":"rr-ok");
   const badgeCls=cell.tone==="down"?"b-down":(cell.tone==="warn"?"b-warn":"b-ok");
   let depthTxt="";
   if(cur<=lower) depthTxt=` · 已跌破下轨外 <b>${cell.depth.toFixed(1)}</b> 格`;
   else if(cur>=upper) depthTxt=` · 已突破上轨外 <b>${cell.depth.toFixed(1)}</b> 格`;
   const outHtml=breached
-    ? (cur<=lower ? `<i class="rr-out" style="left:${pctOf(dLo)}%;width:${pctOf(lower)-pctOf(dLo)}%"></i>`
-                  : `<i class="rr-out" style="left:${pctOf(upper)}%;width:${pctOf(dHi)-pctOf(upper)}%"></i>`)
+    ? (cur<=lower ? `<rect x="${pctOf(dLo).toFixed(2)}" y="0" width="${(pctOf(lower)-pctOf(dLo)).toFixed(2)}" height="100" fill="rgba(192,57,43,.13)"/>`
+                  : `<rect x="${pctOf(upper).toFixed(2)}" y="0" width="${(pctOf(dHi)-pctOf(upper)).toFixed(2)}" height="100" fill="rgba(192,57,43,.13)"/>`)
     : "";
   /* 持仓占比剖面：以当前持仓为锚，沿网格轴按「每下一格多买一笔 / 每上一格多卖一笔」推算各价位持仓占比 */
   const hrMv=sm.gridPos*sm.cur, hrTotal=sm.totalAssets||0, hrCash=hrTotal-hrMv;
@@ -1316,27 +1324,34 @@ function renderHoldRailMerged(g, sm){
   const profPts=lines.map(l=>({x:pctOf(l.price), y:profAt(l.k)}));
   const lp=profPts.map(p=>`${p.x.toFixed(2)},${(100-p.y).toFixed(2)}`).join(" ");
   const x0=profPts[0].x.toFixed(2), x1=profPts[profPts.length-1].x.toFixed(2);
-  const svg=`<svg class="hr-prof-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-    <polygon points="${x0},100 ${lp} ${x1},100" fill="rgba(178,58,46,.16)"/>
-    <polyline points="${lp}" fill="none" stroke="#B23A2E" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
-    <line x1="${curPct.toFixed(2)}" y1="0" x2="${curPct.toFixed(2)}" y2="100" stroke="#1A56C4" stroke-width="1.4" stroke-dasharray="3 2" vector-effect="non-scaling-stroke"/>
+  const dotY=(100-hrMvPct).toFixed(2);
+  // 占比数字标签自适应：点靠近顶部/左右边缘时翻向内侧，避免被 .hr-plot 的 overflow:hidden 裁掉
+  const lblTx = curPct<14 ? "0%" : (curPct>86 ? "-100%" : "-50%");
+  const lblTy = hrMvPct>80 ? "32%" : "-135%";
+  const lblStyle=`left:${curPct.toFixed(2)}%;top:${dotY}%;transform:translate(${lblTx},${lblTy})`;
+  const svg=`<svg class="hr-combo-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+    ${outHtml}
+    <polygon points="${x0},100 ${lp} ${x1},100" fill="rgba(178,58,46,.15)"/>
+    ${cellHtml}
+    ${ticks.join("")}
+    <polyline points="${lp}" fill="none" stroke="#B23A2E" stroke-width="1.8" vector-effect="non-scaling-stroke"/>
+    <line x1="${curPct.toFixed(2)}" y1="0" x2="${curPct.toFixed(2)}" y2="100" stroke="#1A56C4" stroke-width="1.6" stroke-dasharray="3 2" vector-effect="non-scaling-stroke"/>
+    <circle cx="${curPct.toFixed(2)}" cy="${dotY}" r="2.4" fill="#1A56C4" stroke="#fff" stroke-width="0.9" vector-effect="non-scaling-stroke"/>
   </svg>`;
   return `
-  <div class="hr-merged">
-    <div class="hr-mtitle">持仓-网格耦合<span class="hr-msub">共用价格轴：价格越往下格→买入越多→持仓占比越高</span></div>
-    <div class="rr-track ${trackCls}">
-      ${outHtml}
-      ${cellHtml}
-      ${ticks.join("")}
-      <i class="rr-now" style="left:${curPct}%"></i>
+  <div class="hr-combo">
+    <div class="hr-mtitle">持仓-网格耦合<span class="hr-msub">同一价格轴：网格线=穿轨位置，红线=持仓占比，蓝点=当前</span></div>
+    <div class="hr-combo-grid">
+      <div class="hr-yaxis"><span>100%</span><span>50%</span><span>0%</span></div>
+      <div class="hr-plot">
+        ${svg}
+        <div class="hr-ylab">持仓占比</div>
+        ${hrReady?`<div class="hr-cur-pct" style="${lblStyle}">持仓 ${hrMvPct.toFixed(1)}%</div>`:""}
+      </div>
     </div>
-    <div class="hr-prof">
-      ${svg}
-      <div class="hr-prof-axis"><span>高持仓（低价区）</span><span>低持仓（高价区）</span></div>
-    </div>
-    <div class="rr-axis">
+    <div class="hr-xaxis">
       <span>下轨 ¥${fmt(lower,3)}</span>
-      <span class="hr-cur">现价 ¥${fmt(cur,3)}${depthTxt}</span>
+      <span class="hr-curx">现价 ¥${fmt(cur,3)}${depthTxt}</span>
       <span>上轨 ¥${fmt(upper,3)}</span>
     </div>
     <div class="hr-foot">
@@ -1344,6 +1359,7 @@ function renderHoldRailMerged(g, sm){
       ${hrReady?`<span class="hr-pill">持仓占比 <b>${hrMvPct.toFixed(1)}%</b> · 市值 ¥${fmt(hrMv,0)} / 现金 ¥${fmt(hrCash,0)}</span>`:""}
       <span class="rr-badge ${badgeCls}">${cell.status}</span>
     </div>
+    <div class="hr-legend"><span><i class="hr-dot" style="background:#C0392B"></i>上下轨</span><span><i class="hr-dot" style="background:#8A6A2F"></i>基准价</span><span><i class="hr-dot" style="background:#B23A2E"></i>持仓占比曲线</span><span><i class="hr-dot" style="background:#1A56C4"></i>现价 / 当前占比</span></div>
   </div>`;
 }
 
