@@ -681,6 +681,7 @@ tbody tr:hover{background:#FBFAF7}
 "use strict";
 const LS = "wb_gridtrader_";
 const KEY_STATE = LS+"state";
+const KEY_STATE_BAK = LS+"state_bak";   // 本机自动备份（云端拉取覆盖本地前留底，可一键回滚）
 const KEY_CLOUD = LS+"cloud";
 // 本地测试网格（仅存本机、不上云，避免污染云端真实数据）：用于验证"实盘连续触发自动录入"
 const KEY_TESTGRID = LS+"testgrid";
@@ -726,6 +727,15 @@ function isPristine(s){
   if(!g.trades || g.trades.length!==9) return false;
   const sig=JSON.stringify((g.trades||[]).map(t=>[t.date,t.type,t.trigger,t.qty]));
   return sig===DEFAULT_SIG;
+}
+/* "空状态"= 既无网格也无资产组合。注意：这类状态并非 isPristine（它不是那个特定示例签名），
+   因此历史上会绕过"示例数据保护"被上传到云端、并反向覆盖其他设备的真实数据 —— 造成过一次全量丢失。
+   现将其单独识别，作为"不可用于覆盖"的状态。 */
+function isEmptyState(s){
+  if(!s || typeof s!=="object") return true;
+  const noG = !Array.isArray(s.grids) || s.grids.length===0;
+  const noP = !Array.isArray(s.portfolios) || s.portfolios.length===0;
+  return noG && noP;
 }
 
 /* ============ 默认 / 演示数据（来自 Excel + 腾讯自选股） ============ */
@@ -968,6 +978,12 @@ function cfetch(url, opts, tries){
 function cloudPush(showToast){
   const c=cloudCfg(); if(!c) return Promise.resolve(false);
   if(state._pristine){ console.warn("跳过云端上传：当前为默认演示数据，避免覆盖云端真实数据"); return Promise.resolve(false); }
+  // 空状态（无网格且无组合）绝不上传，避免一次误删/异常把云端全部历史抹掉
+  if(isEmptyState(state)){
+    console.warn("跳过云端上传：本地无网格且无组合，避免用空数据覆盖云端历史");
+    if(showToast) toast("本地为空，已阻止覆盖云端（数据已被保护）");
+    return Promise.resolve(false);
+  }
   const now = state._savedAt || new Date().toISOString();
   // 本地测试网格（_noCloudSync）仅存本机，过滤掉再上云，绝不污染云端真实数据
   const pushState = (state.grids && state.grids.some(g=>g._noCloudSync))
@@ -992,15 +1008,26 @@ function cloudPull(force){
     .then(rows=>{
       const row=(rows&&rows[0])?rows[0]:null;
       if(!row||!row.data) return false;
+      if(!Array.isArray(row.data.grids)) return false;          // 结构异常（非本工具数据），拒绝采用
       const cloudP = isPristine(row.data);
       const localP = !!state._pristine;
-      const cloudNewer = force || tsMs(row.updated_at) > tsMs(state._savedAt);
-      // 关键保护：若本地是真实数据、云端却是默认演示数据，绝不拉取覆盖本地（防止被写坏的云端反向破坏）
-      if(cloudP && !localP) return false;
-      if(!cloudNewer) return false;
+      const cloudEmpty = isEmptyState(row.data);
+      const localEmpty = isEmptyState(state);
+      /* 保护 A：云端为空、本地有内容 → 绝不拉取覆盖本地（这就是上次全量丢失的路径，必须堵死） */
+      if(cloudEmpty && !localEmpty) return false;
+      /* 保护 B：本地为空、云端有内容 → 忽略时间戳，强制拉取，实现"误清空后自动自愈" */
+      const selfHeal = localEmpty && !cloudEmpty && !localP;
+      if(!selfHeal){
+        const cloudNewer = force || tsMs(row.updated_at) > tsMs(state._savedAt);
+        // 保护 C：本地是真实数据、云端却是默认演示数据 → 不覆盖本地
+        if(cloudP && !localP) return false;
+        if(!cloudNewer) return false;
+      }
+      // 覆盖前：把当前本地状态留一份备份，可一键回滚
+      try{ localStorage.setItem(KEY_STATE_BAK, JSON.stringify(Object.assign({}, state, {_bakAt:new Date().toISOString()}))); }catch(e){}
       state=row.data; state._pristine=false;
       saveLocal(); render();
-      toast("已从云端同步 · "+(state.grids?state.grids.length:0)+" 个网格 / "+(state.portfolios?state.portfolios.length:0)+" 个组合"); return true;
+      toast((selfHeal? "检测到本机为空，已自动从云端恢复 · " : "已从云端同步 · ")+(state.grids?state.grids.length:0)+" 个网格 / "+(state.portfolios?state.portfolios.length:0)+" 个组合"); return true;
     }).catch(err=>{ console.warn("云端拉取失败：",err); return false; });
 }
 function cloudPullManual(){
@@ -3739,7 +3766,8 @@ function renderCloudPanel(){
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button class="btn ghost" onclick="maybeSnapshot(true)">立即生成今日快照</button>
           <button class="btn ghost" onclick="listSnapshots()">恢复特定日期数据</button>
-          <span id="snapHint" style="color:var(--muted);font-size:12px">点「恢复特定日期数据」列出最近 30 天可恢复日期</span>
+          <button class="btn ghost" onclick="restoreLocalBak()">恢复上次备份</button>
+          <span id="snapHint" style="color:var(--muted);font-size:12px">「恢复上次备份」= 本机最近一次被云端覆盖前的自动留底</span>
         </div>
         <div id="snapBox" style="margin-top:6px"></div>
       </div>
@@ -5503,8 +5531,19 @@ function clearSample(){
   });
 }
 function clearAll(){
-  confirmModal("清空全部数据","将清空所有网格、交易、参数与行情，恢复初始示例。此操作不可逆！",()=>{
-    localStorage.removeItem(KEY_STATE); state=defaultState(); state._pristine=true; save(); render(); toast("已恢复初始示例（云端真实数据保留，下次同步会恢复）");
+  confirmModal("清空本机数据","将清空【本机】所有网格、交易、参数与行情，恢复初始示例。云端数据不会被删除；本机清空前会自动留一份备份，可随时找回。",()=>{
+    try{ localStorage.setItem(KEY_STATE_BAK, JSON.stringify(Object.assign({}, state, {_bakAt:new Date().toISOString()}))); }catch(e){}
+    localStorage.removeItem(KEY_STATE); state=defaultState(); state._pristine=true; saveLocal(); render();
+    toast("已清空本机数据（云端保留；可点「恢复上次备份」或「立即拉取云端」找回）");
+  });
+}
+/* 一键回滚到"上一次云端覆盖前/清空前"的本机自动备份 */
+function restoreLocalBak(){
+  let b=null; try{ b=JSON.parse(localStorage.getItem(KEY_STATE_BAK)||"null"); }catch(e){}
+  if(!b || !Array.isArray(b.grids)){ toast("本机暂无自动备份"); return; }
+  const n=b.grids.length, np=(b.portfolios||[]).length;
+  confirmModal("恢复上次自动备份", "将用本机自动备份覆盖当前数据。备份时间："+(b._bakAt||"未知")+"，含 "+n+" 个网格 / "+np+" 个组合。确认？", ()=>{
+    delete b._bakAt; state=b; state._pristine=false; save(); render(); toast("已恢复上次自动备份 · "+n+" 个网格 / "+np+" 个组合");
   });
 }
 
