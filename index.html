@@ -91,6 +91,8 @@ h1{font-size:25px;font-weight:600;margin:5px 0 2px;letter-spacing:.01em;}
 .auto-rec-line .tp-sell{color:#80CBC4}
 .tag.auto{background:#E7F0E9;color:#2E7D5B;border:1px solid #BFE0C8}
 .mini-auto{display:inline-block;margin-left:4px;padding:0 5px;border-radius:2px;font-size:10.5px;background:#E7F0E9;color:#2E7D5B;border:1px solid #BFE0C8;vertical-align:middle}
+.mini-time{font-variant-numeric:tabular-nums;font-weight:600;color:#2E7D5B}
+.tc-dim{color:var(--muted);opacity:.6}
 tbody tr.hl-auto{background:#F2F8F3}
 tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .tag.lock{background:transparent;border:1px solid var(--lock);color:var(--lock)}
@@ -713,6 +715,17 @@ function daysAgoISO(n){ const d=new Date(); d.setDate(d.getDate()-n); const z=k=
 function parseDate(s){ const p=String(s).split("-"); return new Date(+p[0], (+p[1]||1)-1, +p[2]||1); }
 // 两个日期之间相差的天数（b − a，按本地零点算，整天数）
 function daysBetween(a, b){ return Math.round((parseDate(b)-parseDate(a))/86400000); }
+/* 分时时间戳 → "HH:MM"：兼容东财 "YYYY-MM-DD HH:MM"、腾讯 "HHMM[SS]"、以及纯 "HH:MM" */
+function normBarTime(t){
+  const s=String(t==null?"":t).trim(); if(!s) return null;
+  let m=s.match(/(\d{1,2}):(\d{2})/);
+  if(m) return String(m[1]).padStart(2,"0")+":"+m[2];
+  m=s.match(/(\d{3,6})$/);
+  if(m){ const d=m[1].padStart(4,"0").slice(0,4); return d.slice(0,2)+":"+d.slice(2,4); }
+  return null;
+}
+/* 当前本地时刻 "HH:MM"（用于分时末点=实时价那一笔的触发时间） */
+function nowHM(){ const d=new Date(); const z=n=>String(n).padStart(2,"0"); return z(d.getHours())+":"+z(d.getMinutes()); }
 function clone(o){ return JSON.parse(JSON.stringify(o)); }
 function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
 function round(v,d){ const f=Math.pow(10,d); return Math.round(v*f)/f; }
@@ -3966,10 +3979,10 @@ function renderDetail(g){
   let tp = g._tp||0; if(tp>=totalPages) tp=totalPages-1; if(tp<0) tp=0;
   const cfg = isConfigured(g);   // 建仓阶段不可直接用现金模型，累计现金/总资产按持仓市值呈现
   const pRows=sorted.slice(tp*perPage,(tp+1)*perPage);
-  const tradeRows = sorted.length===0 ? `<tr><td colspan="11" class="empty">暂无交易，先在下方「新建交易」录入</td></tr>`
+  const tradeRows = sorted.length===0 ? `<tr><td colspan="12" class="empty">暂无交易，先在下方「新建交易」录入</td></tr>`
     : pRows.map((t,k)=>{ const r=btRowByTrade.get(t); const ni=tp*perPage+k;
         return `<tr class="${t._auto?'hl-auto':''}">
-          <td>${t.date}</td><td>${t.type}${t._auto?` <span class="mini-auto">自动</span>`:''}</td><td>${fmt(t.trigger,3)}</td><td>${fmt(t.qty,0)}</td><td>${fmt(t.close,3)}</td>
+          <td>${t.date}</td><td>${t._auto? (t.time? `<span class="mini-time">${t.time}</span>` : '<span class="tc-dim">—</span>') : '<span class="tc-dim">—</span>'}</td><td>${t.type}${t._auto?` <span class="mini-auto">自动</span>`:''}</td><td>${fmt(t.trigger,3)}</td><td>${fmt(t.qty,0)}</td><td>${fmt(t.close,3)}</td>
           <td>${cfg? fmt(r.J,0) : "—"}</td><td>${fmt(r.M,0)}</td><td>${cfg? fmt(r.N,0) : fmt(r.M,0)}</td><td>${fmt(r.holdInvested,3)}</td>
           <td class="${signClass(r.V)}">${fmt(r.V,2)}</td>
           <td><button class="btn ghost mini" onclick="editTrade('${g.id}',${ni})">改</button><button class="btn ghost mini" onclick="delTrade('${g.id}',${ni})">删</button></td>
@@ -4090,7 +4103,7 @@ function renderDetail(g){
       </div>
       <div class="card-body">
         <div class="scroll" style="margin-top:0"><table><thead><tr>
-          <th>日期</th><th>类型</th><th>触发价</th><th>数量</th><th>当日收盘</th>
+          <th>日期</th><th>触发时间</th><th>类型</th><th>触发价</th><th>数量</th><th>当日收盘</th>
           <th>累计现金</th><th>持仓市值</th><th>总资产</th><th>持仓成本</th><th>累计网格收益</th><th></th>
         </tr></thead><tbody id="tradeBody">${tradeRows}</tbody></table></div>
         ${pager}
@@ -5651,13 +5664,13 @@ function autoGridMonitor(){
       // 路径：东方财富分时带 high/low；腾讯分时仅给每分钟收盘，这里用「前收~本收」重建当分钟高低，避免漏掉穿越
       let prevDayClose=cur;
       if(m.kline && m.kline.length){ const past=m.kline.filter(x=>x.date<today); if(past.length) prevDayClose=past[past.length-1].close; }
-      const path = bars.map(b=>({high:(b.high!=null?b.high:b.close), low:(b.low!=null?b.low:b.close), close:b.close}));
+      const path = bars.map(b=>({high:(b.high!=null?b.high:b.close), low:(b.low!=null?b.low:b.close), close:b.close, time:normBarTime(b.t)}));
       for(let i=0;i<path.length;i++){
         const prev = i>0 ? path[i-1].close : prevDayClose;
         path[i].high = Math.max(path[i].high, path[i].close, prev);
         path[i].low  = Math.min(path[i].low,  path[i].close, prev);
       }
-      path.push({high:cur, low:cur, close:cur});     // 现价作为末点，参与判定
+      path.push({high:cur, low:cur, close:cur, time:nowHM()});     // 现价作为末点，参与判定（触发时间取当前时刻）
       // 成交驱动基准：近一次（非今日）成交价；无则初始基准价
       const prevDeals = g.trades.filter(t=>(t.type==="买入"||t.type==="卖出") && t.date<today)
         .sort((a,b)=> a.date<b.date?1:(a.date>b.date?-1:0));
@@ -5671,10 +5684,10 @@ function autoGridMonitor(){
           const buyLine=base*(1-sp), sellLine=base*(1+sp);
           if(bar.high>=sellLine-EPS && bar.low<=buyLine+EPS){
             // 双向穿越（罕见）：按收盘方向先处理其一，本根不再处理第二次（防刷单）
-            if(bar.close>=base-EPS){ seq.push({type:"卖出", trigger:r3(sellLine)}); base=r3(sellLine); }
-            else { seq.push({type:"买入", trigger:r3(buyLine)}); base=r3(buyLine); }
-          } else if(bar.high>=sellLine-EPS){ seq.push({type:"卖出", trigger:r3(sellLine)}); base=r3(sellLine); }
-          else if(bar.low<=buyLine+EPS){ seq.push({type:"买入", trigger:r3(buyLine)}); base=r3(buyLine); }
+            if(bar.close>=base-EPS){ seq.push({type:"卖出", trigger:r3(sellLine), time:bar.time}); base=r3(sellLine); }
+            else { seq.push({type:"买入", trigger:r3(buyLine), time:bar.time}); base=r3(buyLine); }
+          } else if(bar.high>=sellLine-EPS){ seq.push({type:"卖出", trigger:r3(sellLine), time:bar.time}); base=r3(sellLine); }
+          else if(bar.low<=buyLine+EPS){ seq.push({type:"买入", trigger:r3(buyLine), time:bar.time}); base=r3(buyLine); }
           else break;
         }
       }
@@ -5684,24 +5697,35 @@ function autoGridMonitor(){
         if(bars.length < autoCnt) return null;   // 退化保护：当日分时被截断/异常（根数少于已录数）→ 保留现状，避免把完整序列降成残缺
         g.trades = g.trades.filter(t=> !(t._auto && t.date===today));  // 测试网格：今日自动成交按当前当日分时干净重算
       }
-      const exist=new Set(g.trades.filter(t=>t.date===today && (t.type==="买入"||t.type==="卖出"))
-        .map(t=> t.type+"@"+r3(t.trigger)));
-      const added=[];
+      const todaySide=g.trades.filter(t=>t.date===today && (t.type==="买入"||t.type==="卖出"));
+      const exist=new Set(todaySide.map(t=> t.type+"@"+r3(t.trigger)));
+      const autoMap=new Map(); todaySide.forEach(t=>{ if(t._auto) autoMap.set(t.type+"@"+r3(t.trigger), t); });
+      const added=[], touched=[];
       for(const d of seq){
         const key=d.type+"@"+r3(d.trigger);
-        if(exist.has(key)) continue;
+        if(exist.has(key)){
+          // 已录入的同价同方向自动成交：历史遗留缺触发时间的，就地补全（不新增、不改价）
+          const ex=autoMap.get(key);
+          if(ex && !ex.time && d.time){ ex.time=d.time; touched.push(1); }
+          continue;
+        }
         exist.add(key);
-        g.trades.push({date:today, type:d.type, trigger:d.trigger, qty, close:round(cur,3), _auto:true});
+        const rec={date:today, type:d.type, trigger:d.trigger, qty, close:round(cur,3), _auto:true};
+        if(d.time) rec.time=d.time;                    // 该笔自动成交的具体触发时间（HH:MM）
+        g.trades.push(rec); autoMap.set(key, rec);
         added.push(d.type);
       }
-      if(added.length){ g._sample=false; return {g, added}; }
+      if(added.length || touched.length){ g._sample=false; return {g, added, touched:touched.length}; }
       return null;
     }).catch(()=>null);
   })).then(results=>{
     const logged = results.filter(Boolean);
     if(!logged.length) return;
     save(); render();
-    logged.forEach(({g,added})=> toast(`已自动录入「${g.meta.name}」今日${added.length}笔成交（成交驱动网格）`));
+    logged.forEach(({g,added,touched})=>{
+      if(added.length) toast(`已自动录入「${g.meta.name}」今日${added.length}笔成交（成交驱动网格·已含触发时间）`);
+      else if(touched) toast(`已补全「${g.meta.name}」${touched} 笔自动成交的触发时间`);
+    });
   });
 }
 function toggleAutoMonitor(){
