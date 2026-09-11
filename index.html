@@ -4342,7 +4342,7 @@ function ackSet(id){
 function ackBand(id){ ackSet(id); }
 /* 轻量消隐按钮（带勾选图标），用于「今日已处理·确定」「备份提醒·已备份」 */
 function ackBtn(id, label){
-  return `<button class="btn ack" onclick="ackBand('${id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6L9 17l-5-5"/></svg>${label}</button>`;
+  return `<button class="btn ack" onclick="ackBand('${id}')">${label}</button>`;
 }
 
 function renderBandGrid(g, sm, posHold){
