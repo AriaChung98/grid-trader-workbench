@@ -3587,6 +3587,7 @@ function render(){
   renderHeader();
   syncFabBack();
   const v=$("view");
+  if(state.settings){ v.innerHTML = renderSettings(); return; }
   if(state.creating){ v.innerHTML = renderNewGrid(); bindNewGrid(); return; }
   if(state.activePfId){ const pf=getPf(state.activePfId); if(pf){
       /* 编辑模式：草稿存在且针对当前组合 → 渲染详情页内编辑视图（含暂停网格提醒） */
@@ -3600,11 +3601,12 @@ function render(){
 function renderHeader(){
   const h=$("hdr");
   let tools = ``;
-  if(state.activeId || state.creating || state.activePfId){
+  if(state.activeId || state.creating || state.activePfId || state.settings){
     tools = `<button class="btn" onclick="state.creating?cancelNewConfirm():back()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg><span class="txt">返回总览</span></button>`;
   } else {
     tools = `<button class="btn primary" onclick="startNew()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg><span class="txt">新增网格交易</span></button>
-      <button class="btn" id="allMktBtn" onclick="refreshAllPrices()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/></svg><span class="txt">刷新行情</span></button>`;
+      <button class="btn" id="allMktBtn" onclick="refreshAllPrices()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/></svg><span class="txt">刷新行情</span></button>
+      <button class="btn" onclick="openSettings()" title="数据与同步设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 13.6H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.7 7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 3V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 .3 1.9"/></svg><span class="txt">设置</span></button>`;
   }
   h.innerHTML = `<div><div class="brand">Grid Trading · Multi-Desk</div><h1>网格交易回测工作台</h1>
     <div class="sub">${state.grids.length} 个网格 · ${pfList().length} 个组合 · 手机电脑通用 · ${cloudCfg()?"已启用云端同步":"数据本地保存"}</div></div>
@@ -3734,8 +3736,10 @@ function renderOverview(){
     <div class="ov">${rows}${hiddenRows}${empty}</div>
   </section>
   <section class="section backup-mini">
-    <div class="lab"><span class="t">数据备份（次要）</span><span>已启用云端自动同步，一般无需手动备份</span></div>
+    <div class="lab"><span class="t">数据备份与恢复</span><span>云端自动同步，一般无需手动操作</span></div>
     <div class="backup-row">
+      <button class="btn sm primary" onclick="restoreLocalBak()">恢复上次备份</button>
+      <button class="btn sm ghost" onclick="openSettings()">设置 · 云端同步</button>
       <button class="btn sm ghost" onclick="exportJSON()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg><span class="txt">导出 JSON</span></button>
       <button class="btn sm ghost" onclick="document.getElementById('imp').click()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21V9M7 14l5-5 5 5M5 3h14"/></svg><span class="txt">导入恢复</span></button>
       <input type="file" id="imp" class="filein" accept="application/json" onchange="importJSON(event)">
@@ -3772,6 +3776,30 @@ function renderCloudPanel(){
         <div id="snapBox" style="margin-top:6px"></div>
       </div>
     </div></div>
+  </section>`;
+}
+
+/* ============ 设置页（数据与同步） ============ */
+function openSettings(){ state.settings=true; state.creating=null; state.activeId=null; state.activePfId=null; render(); }
+function closeSettings(){ state.settings=false; render(); }
+function renderSettings(){
+  return `
+  <section class="section" style="margin-top:6px">
+    <div class="lab"><span class="t">设置 · 数据与同步</span><span>
+      <button class="btn sm ghost" onclick="closeSettings()">返回总览</button></span></div>
+    ${renderCloudPanel()}
+    <section class="section">
+      <div class="lab"><span class="t">本机备份与恢复</span><span>找回"上一次被覆盖 / 清空前"的数据</span></div>
+      <div class="card"><div class="card-body">
+        <div class="backup-row">
+          <button class="btn sm primary" onclick="restoreLocalBak()">恢复上次备份</button>
+          <button class="btn sm ghost" onclick="exportJSON()">导出 JSON</button>
+          <button class="btn sm ghost" onclick="document.getElementById('impSet').click()">导入恢复</button>
+          <input type="file" id="impSet" class="filein" accept="application/json" onchange="importJSON(event)">
+        </div>
+        <div class="note" style="margin-top:8px">「恢复上次备份」= 本机最近一次被云端覆盖 / 清空之前自动留底的数据（时间与数量会先列出确认）。若从未发生过覆盖，则暂无备份可恢复。</div>
+      </div></div>
+    </section>
   </section>`;
 }
 
@@ -4494,7 +4522,7 @@ function openGridEdit(id){ const g=getGrid(id); if(!g) return; g._editing=true; 
 function openPfMember(id){ state._pfFrom=state.activePfId||null; openGrid(id); }
 function back(){
   const backPf = (state.activePfId==null && state.activeId && state._pfFrom) ? state._pfFrom : null;
-  state.creating=null; state.activeId=null; state.activePfId=null;
+  state.creating=null; state.activeId=null; state.activePfId=null; state.settings=false;
   state.grids.forEach(g=>{ g._editing=false; g._draft=null; g._setupMode=false; g._histEdit=null; g._hdraft=null; });
   if(backPf){ state.activePfId=backPf; state._pfFrom=null; }
   save(); render();
@@ -5540,7 +5568,7 @@ function clearAll(){
 /* 一键回滚到"上一次云端覆盖前/清空前"的本机自动备份 */
 function restoreLocalBak(){
   let b=null; try{ b=JSON.parse(localStorage.getItem(KEY_STATE_BAK)||"null"); }catch(e){}
-  if(!b || !Array.isArray(b.grids)){ toast("本机暂无自动备份"); return; }
+  if(!b || !Array.isArray(b.grids)){ toast("本机暂无自动备份（可到「设置 → 立即拉取云端」或「恢复特定日期数据」找回）"); return; }
   const n=b.grids.length, np=(b.portfolios||[]).length;
   confirmModal("恢复上次自动备份", "将用本机自动备份覆盖当前数据。备份时间："+(b._bakAt||"未知")+"，含 "+n+" 个网格 / "+np+" 个组合。确认？", ()=>{
     delete b._bakAt; state=b; state._pristine=false; save(); render(); toast("已恢复上次自动备份 · "+n+" 个网格 / "+np+" 个组合");
