@@ -5340,7 +5340,7 @@ function fetchIntradayEM(code){
   const url=`https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&klt=1&fqt=0&beg=${beg}&end=${end}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57,f58`;
   const parse=r=>r.json().then(d=>{
     if(!d||!d.data||!d.data.klines||!d.data.klines.length) return [];
-    return d.data.klines.map(x=>{ const a=x.split(","); return {t:a[0], open:+a[1], close:+a[2], high:+a[3], low:+a[4]}; });
+    return d.data.klines.map(x=>{ const a=x.split(","); return {t:a[0], d:String(a[0]||"").slice(0,10), open:+a[1], close:+a[2], high:+a[3], low:+a[4]}; });
   });
   return fetchWithTimeout(url,9000).then(parse).catch(()=> fetchWithTimeout(url,9000).then(parse).catch(()=>[]));
 }
@@ -5383,7 +5383,11 @@ function fetchIntradayTX(code){
       const node=d&&d.data&&(d.data[code]||{});
       const arr=(node.data&&node.data.data)||[];
       if(!arr.length) return rej(new Error("无分时"));
-      const out=arr.map(x=>{ const a=String(x).split(" "); return {t:a[0], close:parseFloat(a[1])}; });
+      /* 腾讯会带 data.date（如 "20260914"）——休市日它回吐的是"上一交易日"的分时，
+         必须把这个日期带出来，供上层校验"数据是否属于今天"，否则会把周五的行情记成周六的成交 */
+      const dd=String((node.data&&node.data.date)||"");
+      const dISO=/^\d{8}$/.test(dd)? dd.slice(0,4)+"-"+dd.slice(4,6)+"-"+dd.slice(6,8) : null;
+      const out=arr.map(x=>{ const a=String(x).split(" "); return {t:a[0], d:dISO, close:parseFloat(a[1])}; });
       res(out);
     }catch(e){ rej(e); } };
     s.src=`https://web.ifzq.gtimg.cn/appstock/app/minute/query?_var=${cb}&code=${code}`;
@@ -5645,6 +5649,9 @@ const AUTO_MONITOR_MS = 60000;   // 每 60 秒巡检一次（仅页面打开时�
 function autoGridMonitor(){
   if(state._autoMonitor===false) return;          // 默认开启；可在「今天要处理」中关闭
   const today=todayISO();
+  // 休市保护①：周六/周日绝不录入（曾在 2026-09-12 周六把周五行情记成周六成交）
+  const dow=new Date().getDay();
+  if(dow===0 || dow===6) return;
   const targets = state.grids.filter(g=> isConfigured(g) && !isStopped(g) && !isPaused(g) && !g._noAuto);
   if(!targets.length) return;
   Promise.all(targets.map(g=>{
@@ -5659,18 +5666,41 @@ function autoGridMonitor(){
       const base0=g.cond.params.basePrice;
       if(!(sp>0) || !(base0>0)) return null;
       const qty = Math.max(100, Math.round((g.cond.params.qtyPerTrade||0)/100)*100);  // 整手（100股倍数）
-      // 当日分时路径；取不到分时则本 tick 跳过（避免用日K高低误录，下一 tick 有分时再判定）
+      // 当日分时；取不到则本 tick 跳过（避免用日K高低误录，下一 tick 有分时再判定）
       if(!(bars && bars.length)) return null;
-      // 路径：东方财富分时带 high/low；腾讯分时仅给每分钟收盘，这里用「前收~本收」重建当分钟高低，避免漏掉穿越
+      /* 校验并清洗分时：
+         ① 数据日期必须 = 今天 —— 东财/腾讯在休市日会回吐"上一交易日"分时，曾把周五行情记成周六成交；
+         ② 剔除 close 非正/非有限 的占位K线 —— 开盘前集合竞价等会返回 high=low=close=0，
+            零值会让下面的网格循环无限穿越，单根刷出上百笔"几何级数"假成交（2026-09-14 的事故）。 */
+      const todayBars = bars.filter(b=>{
+        if(b.d && b.d!==today) return false;
+        const c=+b.close;
+        return isFinite(c) && c>0;
+      });
+      if(!todayBars.length) return null;
+      // 路径：东财分时带 high/low；腾讯仅给每分钟收盘，这里用「前收~本收」重建当分钟高低，避免漏掉穿越
       let prevDayClose=cur;
-      if(m.kline && m.kline.length){ const past=m.kline.filter(x=>x.date<today); if(past.length) prevDayClose=past[past.length-1].close; }
-      const path = bars.map(b=>({high:(b.high!=null?b.high:b.close), low:(b.low!=null?b.low:b.close), close:b.close, time:normBarTime(b.t)}));
+      if(m.kline && m.kline.length){
+        const past=m.kline.filter(x=> x.date<today && isFinite(+x.close) && +x.close>0);
+        if(past.length) prevDayClose=past[past.length-1].close;
+      }
+      if(!(isFinite(prevDayClose) && prevDayClose>0)) prevDayClose=todayBars[0].close;
+      const path = todayBars.map(b=>{
+        const c=+b.close;
+        const h=(isFinite(+b.high) && +b.high>0)? +b.high : c;   // 非正/缺失的高低价一律退回收盘价
+        const l=(isFinite(+b.low)  && +b.low >0)? +b.low  : c;
+        return {high:Math.max(h,c), low:Math.min(l,c), close:c, time:normBarTime(b.t)};
+      });
       for(let i=0;i<path.length;i++){
         const prev = i>0 ? path[i-1].close : prevDayClose;
         path[i].high = Math.max(path[i].high, path[i].close, prev);
         path[i].low  = Math.min(path[i].low,  path[i].close, prev);
       }
       path.push({high:cur, low:cur, close:cur, time:nowHM()});     // 现价作为末点，参与判定（触发时间取当前时刻）
+      // 当日"真实成交过"的价格区间：成交价只允许落在区间内（越界即停），从根上杜绝价格级数发散
+      const dayLow = Math.min(...path.map(p=>p.low));
+      const dayHigh= Math.max(...path.map(p=>p.high));
+      const MAX_SEQ=200, MAX_ADD=40;      // 单次巡检的硬上限（防任何异常输入造成连锁刷单）
       // 成交驱动基准：近一次（非今日）成交价；无则初始基准价
       const prevDeals = g.trades.filter(t=>(t.type==="买入"||t.type==="卖出") && t.date<today)
         .sort((a,b)=> a.date<b.date?1:(a.date>b.date?-1:0));
@@ -5678,23 +5708,30 @@ function autoGridMonitor(){
       const r3=v=>Math.round(v*1000)/1000;
       const EPS=1e-9;
       const seq=[];
+      outer:
       for(const bar of path){
-        let guard=0;
-        while(guard++ < 400){   // 单根内可能跨越多格（分钟级跳空），逐格步进，直至该根不再穿越
+        let guard=0, dir=null;   // dir=本根已成交的方向：同一分钟内"只顺一方向"，不做反向二次成交
+        while(guard++ < 60){     // 单根分钟内能跨越的格数有物理上限（60 步已远超任何真实行情）
           const buyLine=base*(1-sp), sellLine=base*(1+sp);
-          if(bar.high>=sellLine-EPS && bar.low<=buyLine+EPS){
-            // 双向穿越（罕见）：按收盘方向先处理其一，本根不再处理第二次（防刷单）
-            if(bar.close>=base-EPS){ seq.push({type:"卖出", trigger:r3(sellLine), time:bar.time}); base=r3(sellLine); }
-            else { seq.push({type:"买入", trigger:r3(buyLine), time:bar.time}); base=r3(buyLine); }
-          } else if(bar.high>=sellLine-EPS){ seq.push({type:"卖出", trigger:r3(sellLine), time:bar.time}); base=r3(sellLine); }
-          else if(bar.low<=buyLine+EPS){ seq.push({type:"买入", trigger:r3(buyLine), time:bar.time}); base=r3(buyLine); }
-          else break;
+          // 成交价必须落在当日真实成交区间内：买价 ≥ 当日最低、卖价 ≤ 当日最高，否则视为异常并停止
+          const canBuy  = bar.low <= buyLine+EPS && buyLine >= dayLow-EPS;
+          const canSell = bar.high>= sellLine-EPS && sellLine <= dayHigh+EPS;
+          let next=null;
+          if(canBuy && canSell) next = (bar.close>=base-EPS)? "卖" : "买";   // 双向：按收盘方向取其一
+          else if(canSell) next="卖";
+          else if(canBuy) next="买";
+          if(!next) break;
+          if(dir && next!==dir) break;   // 分钟内反向 → 停手（缺分钟内路径，防买卖互相刷单）
+          dir=next;
+          if(next==="卖"){ seq.push({type:"卖出", trigger:r3(sellLine), time:bar.time}); base=r3(sellLine); }
+          else { seq.push({type:"买入", trigger:r3(buyLine), time:bar.time}); base=r3(buyLine); }
+          if(seq.length>=MAX_SEQ) break outer;    // 兜底上限
         }
       }
       // 幂等合并：跳过今日已录入的同价同方向成交，仅增量新增（不删除历史成交）
       if(g._testGrid){
         const autoCnt = g.trades.filter(t=>t.date===today && (t.type==="买入"||t.type==="卖出")).length;
-        if(bars.length < autoCnt) return null;   // 退化保护：当日分时被截断/异常（根数少于已录数）→ 保留现状，避免把完整序列降成残缺
+        if(todayBars.length < autoCnt) return null;   // 退化保护：当日分时被截断/异常（根数少于已录数）→ 保留现状，避免把完整序列降成残缺
         g.trades = g.trades.filter(t=> !(t._auto && t.date===today));  // 测试网格：今日自动成交按当前当日分时干净重算
       }
       const todaySide=g.trades.filter(t=>t.date===today && (t.type==="买入"||t.type==="卖出"));
@@ -5702,6 +5739,7 @@ function autoGridMonitor(){
       const autoMap=new Map(); todaySide.forEach(t=>{ if(t._auto) autoMap.set(t.type+"@"+r3(t.trigger), t); });
       const added=[], touched=[];
       for(const d of seq){
+        if(added.length >= MAX_ADD) break;   // 硬上限：单次巡检每标的最多新增 40 笔
         const key=d.type+"@"+r3(d.trigger);
         if(exist.has(key)){
           // 已录入的同价同方向自动成交：历史遗留缺触发时间的，就地补全（不新增、不改价）
