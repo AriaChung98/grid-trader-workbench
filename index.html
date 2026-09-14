@@ -1489,6 +1489,15 @@ function lastDealPrice(trades, basePrice){
   return best ? best.trigger : basePrice;
 }
 function latestBasePrice(g){ return lastDealPrice(g.trades, g.cond.params.basePrice); }
+/* 某个日期之前的最后一笔网格成交价（自动录入引擎的"上一基准价"用）。
+   必须复用 lastDealPrice 的口径：同日多笔取"录入顺序的最后一条"（=当天最后成交的那笔）。
+   曾经 autoGridMonitor 自己按日期排序取 prevDeals[0]，结果取到"当天第一笔"，
+   于是 9/11 先成交 1.597 再成交 1.565 时，次日基准价被算成 1.597，
+   买入线回到 1.565 → 把同一价位又录了一笔（重复触发）。 */
+function lastDealBefore(trades, dateISO, basePrice){
+  const prior=(trades||[]).filter(t=> (t.type==="买入"||t.type==="卖出") && t.date<dateISO);
+  return lastDealPrice(prior, basePrice);
+}
 
 /* 成交驱动（deal-driven）网格：基准价 = 近一次成交价（无成交则用初始基准价）。
    下次买入 = 基准价×(1−间距)，下次卖出 = 基准价×(1+间距)；
@@ -1543,8 +1552,7 @@ function renderNextTrigger(g){
   const p=g.cond.params;
   const cur=p.currentPrice||0;
   const {base,buyNext,sellNext}=nextTriggerLines(g.cond.params, g.trades, cur);
-  const gridT=g.trades.filter(t=>t.type==="买入"||t.type==="卖出").sort((a,b)=>a.date<b.date?1:-1);
-  const last=gridT[0];
+  const last=sortedNewest(g).find(t=>t.type==="买入"||t.type==="卖出") || null;   // 同 lastDealPrice 口径：最近一笔网格成交
   const src = last ? (`近一次成交：${last.date} ${last.type} @¥${fmt(last.trigger,3)}（成交驱动基准价）`) : "尚无网格成交，以初始基准价 ¥"+fmt(g.cond.params.basePrice,3)+" 为参照";
   const bTxt = "¥"+fmt(buyNext,3);
   const sTxt = "¥"+fmt(sellNext,3);
@@ -5701,10 +5709,10 @@ function autoGridMonitor(){
       const dayLow = Math.min(...path.map(p=>p.low));
       const dayHigh= Math.max(...path.map(p=>p.high));
       const MAX_SEQ=200, MAX_ADD=40;      // 单次巡检的硬上限（防任何异常输入造成连锁刷单）
-      // 成交驱动基准：近一次（非今日）成交价；无则初始基准价
-      const prevDeals = g.trades.filter(t=>(t.type==="买入"||t.type==="卖出") && t.date<today)
-        .sort((a,b)=> a.date<b.date?1:(a.date>b.date?-1:0));
-      let base = prevDeals.length? prevDeals[0].trigger : base0;
+      // 成交驱动基准：上一交易日（含更早）的"最后一笔"成交价；无则初始基准价
+      // 统一走 lastDealBefore（同日多笔取录入顺序最后一条），与 UI 的基准价口径完全一致，
+      // 避免"当天第一笔"被误当基准价、把已经成交过的价位重复触发一遍
+      let base = lastDealBefore(g.trades, today, base0);
       const r3=v=>Math.round(v*1000)/1000;
       const EPS=1e-9;
       const seq=[];
