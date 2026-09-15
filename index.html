@@ -376,6 +376,26 @@ tbody tr:hover{background:#FBFAF7}
 .pf-step{margin-top:14px}
 .pf-step .card{margin-top:0}
 .pf-step .card-body{padding:14px 16px}
+.pf-sec{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:18px 0 8px;padding-bottom:5px;border-bottom:1px solid var(--line)}
+.pf-sec:first-child{margin-top:0}
+.pf-sec-t{font-size:13px;font-weight:600;color:var(--ink)}
+.pf-sec-n{font-size:11.5px;color:var(--muted)}
+.pf-chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface);border-radius:14px;padding:3px 10px;font-size:12px;color:var(--ink);cursor:pointer;margin:0 6px 6px 0;white-space:nowrap;line-height:1.6}
+.pf-chip:hover{border-color:var(--ink);background:var(--paper)}
+.pf-chip .n{font-weight:500}
+.pf-chip .c{font-size:11px;color:var(--muted)}
+.pf-chip .i{font-size:10.5px;color:var(--muted);border-right:1px solid var(--line);padding-right:6px}
+.pf-chip .v{font-size:11px;font-weight:600;color:var(--muted)}
+.pf-chip .v.g{color:#2E7D5B} .pf-chip .v.y{color:#8A6A1F} .pf-chip .v.r{color:#8B2E22}
+.pf-cat{display:flex;gap:12px;align-items:flex-start;padding:8px 0;border-bottom:1px dashed var(--line)}
+.pf-cat:last-child{border-bottom:none}
+.pf-cat-t{flex:0 0 150px;font-size:12px;color:var(--ink);padding-top:4px;line-height:1.9}
+.pf-cat-b{flex:1 1 auto;min-width:0}
+.pf-cat-p{display:inline-block;font-size:10px;padding:0 5px;border-radius:7px;margin-right:5px}
+.pf-cat-p.p1{background:#E7F0E9;color:#2E7D5B;border:1px solid #BFE0C8}
+.pf-cat-p.p2{background:#FBF4E6;color:#8A6A1F;border:1px solid #E2C08A}
+.pf-cat-p.p3{background:var(--paper);color:var(--muted);border:1px solid var(--line)}
+@media (max-width:760px){ .pf-cat{flex-direction:column;gap:2px} .pf-cat-t{flex:none;padding-top:0;line-height:1.6} }
 .pf-no{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:var(--ink);color:#fff;font-size:11.5px;font-weight:600;flex:0 0 auto;margin-right:8px;letter-spacing:0}
 @media (max-width:760px){ .pf-step .card-body{padding:12px} .pf-no{width:18px;height:18px;font-size:11px;margin-right:6px} }
 .pf-addline{display:grid;grid-template-columns:1fr 1.6fr auto;gap:8px;align-items:end;margin-top:8px}
@@ -2848,6 +2868,23 @@ function pairRho(gA, gB){
   }
   return {rho:r, src:"先验", n:(rr? rr.n : 0), note:note};
 }
+/* ===== 网格可收割性：网格赚的是波动的钱 =====
+   蒙特卡洛实测标定（按评价规则设参数、含最低手续费）：毛网格收益率 ≈ 0.27 × 年化波动率
+     σ=20.4%(沪深300) → 毛 5.5% / 净 4.8%；σ=56.6%(科创50) → 毛 15.3% / 净 14.1%
+   净 = 毛 × (1 − 费占比)，费占比 ≈ 2×最低手续费 ÷ (单笔金额 × 间距) —— 波动越低，手续费占比越致命。
+   GRID_MIN_VOL 是标的年化波动硬门槛：低于它，最低 5 元手续费会吃掉 25% 以上毛收益，网格无利可图。 */
+const GRID_GROSS_K=0.27;
+const GRID_MIN_VOL=0.15;
+function estGridYield(sig){
+  if(!(sig>0)) return 0;
+  const W=Math.min(PARAM_RULE.MAX_W, Math.max(PARAM_RULE.MIN_W, sig));
+  const N=9;                                  // 资金 4 万时的典型格数
+  const sp=1-Math.pow(1-W, 1/N);
+  const A=2100;                               // 单笔金额下限（评价规则）
+  const f=Math.min(0.95, (2*5)/Math.max(1e-9, A*sp*(1-sp)));
+  return GRID_GROSS_K*sig*(1-f);
+}
+
 /* 组合风险：输入 [{g, w}]（w 需已归一化到合计 1） */
 function pfRisk(members){
   const k=(members||[]).length;
@@ -2865,7 +2902,9 @@ function pfRisk(members){
   }
   const sigmaP=Math.sqrt(Math.max(0, varp));
   const wavg=members.reduce((a,x,i)=>a+x.w*V[i], 0);
-  return { sigmaP, wavg, divRatio:(sigmaP>0? wavg/sigmaP : 1), pairs, V, miss,
+  const gridYield=members.reduce((a,x,i)=>a+x.w*estGridYield(V[i]), 0);
+  return { sigmaP, wavg, gridYield, eff:(sigmaP>0? gridYield/sigmaP : 0),
+    divRatio:(sigmaP>0? wavg/sigmaP : 1), pairs, V, miss,
     avgCorr: pairs.length? pairs.reduce((a,p)=>a+p.rho,0)/pairs.length : 1,
     maxPair: pairs.length? pairs.reduce((a,p)=>(p.rho>a.rho? p:a)) : null };
 }
@@ -2901,60 +2940,70 @@ const DIVERSIFY_POOL=[
 ];
 /* 「可加入的范围」分组展示顺序：从最能分散到最不能 */
 const POOL_GROUPS=[
-  ["bond","债券 · 几乎零相关（首选）"],
-  ["gold","黄金"],
-  ["overseas_us","海外 · 美股"],
-  ["overseas_hk","海外 · 中国香港"],
-  ["commodity","商品"],
-  ["dividend","红利 · 低波（同为 A 股，只能部分分散）"],
-  ["broad_large","宽基 · 大盘"],
-  ["broad_mid","宽基 · 中盘"],
-  ["convertible","可转债（与股票相关度偏高）"],
-  ["broad_growth","宽基 · 成长（与科技持仓高度同向，谨慎）"],
-  ["industry","行业 / 主题（与同赛道持仓高度同向）"],
-  ["stock","个股（高股息 / 低波动代表）"]
+  ["gold","黄金",1,"首选"],
+  ["overseas_us","海外 · 美股",1,"首选"],
+  ["commodity","商品（有色 / 豆粕）",1,"首选"],
+  ["convertible","可转债",2,"可选"],
+  ["overseas_hk","海外 · 中国香港",2,"可选"],
+  ["dividend","红利 · 低波",2,"可选"],
+  ["broad_large","宽基 · 大盘",3,"谨慎"],
+  ["broad_mid","宽基 · 中盘",3,"谨慎"],
+  ["broad_growth","宽基 · 成长",3,"谨慎"],
+  ["industry","行业 / 主题",3,"谨慎"],
+  ["stock","个股（高股息 / 低波动）",3,"谨慎"]
 ];
 /* 「可加入的范围」：按类别展开全部候选 + 具体代码 + 与当前组合的平均相关 ρ̄，点击标签即加入 */
 function pfPoolRangeHTML(members){
   const ms=members||[];
-  const rows=POOL_GROUPS.map(function(g){
-    const items=DIVERSIFY_POOL.filter(function(x){ return x.cat===g[0]; });
-    if(!items.length) return "";
+  const groups=POOL_GROUPS.filter(function(g){
+    return DIVERSIFY_POOL.some(function(x){ return x.cat===g[0] && SYM_CAT[x.cat].annVol>=GRID_MIN_VOL; });
+  });
+  const rows=groups.map(function(g){
+    const items=DIVERSIFY_POOL.filter(function(x){ return x.cat===g[0] && SYM_CAT[x.cat].annVol>=GRID_MIN_VOL; });
     const chips=items.map(function(c){
-      let rhoText="";
+      const sig=SYM_CAT[c.cat].annVol;
+      let rhoTxt="";
       if(ms.length){
         const fake={meta:{code:c.code, name:c.name}, market:null};
         const arr=ms.map(function(x){ return pairRho(fake, x.g).rho; });
         const rb=ms.reduce(function(a,x,i){ return a+x.w*arr[i]; }, 0);
-        const col=(rb<=0.3? "#2E7D5B" : (rb>=0.75? "#8B2E22" : "#8A6A2F"));
-        rhoText=' <span style="color:'+col+'">ρ̄'+rb.toFixed(2)+'</span>';
+        const cls=(rb<=0.3? "g" : (rb>=0.75? "r" : "y"));
+        rhoTxt='<span class="v '+cls+'">ρ'+rb.toFixed(2)+'</span>';
       }
-      const ind=c.ind? ('<span style="color:var(--muted)">'+c.ind+'</span> ') : "";
-      return '<span class="tag info" style="cursor:pointer;margin:0 6px 6px 0;display:inline-block" title="点击加入组合" onclick="pfQuickAdd(\''+c.code+'\')">'+ind+c.code+' '+esc(c.name)+rhoText+'</span>';
+      return '<span class="pf-chip" title="点击加入组合" onclick="pfQuickAdd(\''+c.code+'\')">'
+        + (c.ind? '<span class="i">'+c.ind+'</span>':'')
+        + '<span class="n">'+esc(c.name)+'</span>'
+        + '<span class="c">'+c.code+'</span>'
+        + '<span class="v">σ'+(sig*100).toFixed(0)+'%</span>'
+        + rhoTxt + '</span>';
     }).join("");
-    return '<div style="display:flex;gap:8px;margin-bottom:6px;align-items:baseline;flex-wrap:wrap">'
-      + '<div style="flex:0 0 186px;font-size:12px;color:var(--muted)">'+g[1]+'</div>'
-      + '<div style="flex:1 1 320px;min-width:0">'+chips+'</div></div>';
+    return '<div class="pf-cat"><div class="pf-cat-t"><span class="pf-cat-p p'+g[2]+'">'+g[3]+'</span>'+g[1]+'</div><div class="pf-cat-b">'+chips+'</div></div>';
   }).join("");
-  return '<div style="margin-top:16px">'
-    + '<div style="font-size:13px;font-weight:500;margin-bottom:4px">可加入的范围（含具体代码 · 点击标签即加入）</div>'
-    + '<div style="font-size:11.5px;color:var(--muted);margin-bottom:8px">每行一类，列出该类别的全部候选及 <b>与当前组合的平均相关 ρ̄</b>（<span style="color:#2E7D5B">绿 ≤0.30</span> · <span style="color:#8A6A2F">黄 0.30~0.75</span> · <span style="color:#8B2E22">红 ≥0.75</span>）。未选成员时不显示 ρ̄。</div>'
-    + rows
-    + '<div class="hint" style="font-size:11px;margin-top:4px">说明：<b>个股不是分散工具</b>——单只股票自身波动高，且存在业绩变脸、退市等个体风险，与宽基的相关度通常 0.5~0.8，加入后对组合波动的降低远不如债券 / 黄金；如使用，建议只占小仓位。所列代码为常见标的的代表性示例，仅作"范围参考"，不构成买入推荐。</div>'
-    + '</div>';
+  const exc=[];
+  DIVERSIFY_POOL.forEach(function(x){
+    const nm=SYM_CAT[x.cat].n;
+    if(SYM_CAT[x.cat].annVol<GRID_MIN_VOL && exc.indexOf(nm)<0) exc.push(nm+"（σ≈"+(SYM_CAT[x.cat].annVol*100).toFixed(0)+"%）");
+  });
+  return rows + '<div class="hint" style="font-size:11px;margin-top:8px;line-height:1.7">'
+    + '① <b>已排除波动不足的品种</b>：'+exc.join("、")+'。网格赚的是波动的钱——年化波动低于 '+(GRID_MIN_VOL*100).toFixed(0)+'% 时，最低 5 元手续费会吃掉 25% 以上的毛收益，波动越小越亏。'
+    + '<br>② <b>个股不是分散工具</b>（自身波动高、有退市风险，与宽基相关 0.5~0.8），如使用请控制仓位。'
+    + '<br>③ σ 与 ρ 为<b>类型先验</b>（个股取 35~40% 的类均值，个别差异极大——如长江电力约 15%、多数个股 35%+），点「拉取候选行情并回测」会用实测值复核。</div>';
 }
 /* 候选建议：算每个候选取 t 权重加入后的 σ_p 降幅，按降幅排序 */
 function pfSuggestList(members, t){
   const risk=pfRisk(members);
-  if(!risk || !members.length) return {risk:risk, list:[], t:(t||0.25), holds:members};
+  if(!risk || !members.length) return {risk:risk, list:[], t:(t||0.25), holds:members||[]};
   t=t||0.25;
   const norm=members.map(x=>({g:x.g, w:x.w}));
   const keepW=norm.map(x=>x.w*(1-t));
-  const list=DIVERSIFY_POOL.map(c=>{
-    const fake={meta:{code:c.code, name:c.name}, market:null};
-    const rhoArr=norm.map(x=> pairRho(fake, x.g).rho);
-    const rhoBar=norm.reduce((a,x,i)=>a+x.w*rhoArr[i], 0);
+  const list=[];
+  DIVERSIFY_POOL.forEach(function(c){
     const Vc=SYM_CAT[c.cat].annVol;
+    /* 硬门槛：波动不足的品种直接不进清单（网格赚的是波动的钱） */
+    if(!(Vc>=GRID_MIN_VOL)) return;
+    const fake={meta:{code:c.code, name:c.name}, market:null};
+    const rhoArr=norm.map(function(x){ return pairRho(fake, x.g).rho; });
+    const rhoBar=norm.reduce(function(a,x,i){ return a+x.w*rhoArr[i]; }, 0);
     const all=keepW.concat([t]);
     const V=risk.V.concat([Vc]);
     let varp=0;
@@ -2964,17 +3013,25 @@ function pfSuggestList(members, t){
       else if(i===all.length-1) r=rhoArr[j];
       else if(j===all.length-1) r=rhoArr[i];
       else r=pairRho(norm[i].g, norm[j].g).rho;
-      const mult=(i===j?1:2);
-      varp += all[i]*all[j]*V[i]*V[j]*r*mult*0.5;
+      varp += all[i]*all[j]*V[i]*V[j]*r;      // 全双循环 = wᵀΣw，不再需要 ×2 / ×0.5
     }
-    const sp1=Math.sqrt(Math.max(0,varp));
-    return {code:c.code, name:c.name, cat:c.cat, catName:SYM_CAT[c.cat].n, rhoBar, sigmaP:sp1,
-      drop:(risk.sigmaP>0? (risk.sigmaP-sp1)/risk.sigmaP : 0), vol:Vc};
-  }).sort((a,b)=> b.drop-a.drop);
-  /* 同类别最多保留 2 个：避免清单被三个几乎相同的债券 ETF 占满 */
+    const sp1=Math.sqrt(Math.max(0, varp));
+    const wavg1=all.reduce(function(a,w,i){ return a+w*V[i]; }, 0);
+    const gy1=all.reduce(function(a,w,i){ return a+w*estGridYield(V[i]); }, 0);
+    list.push({code:c.code, name:c.name, cat:c.cat, catName:SYM_CAT[c.cat].n, ind:c.ind||"",
+      rhoBar:rhoBar, vol:Vc, sigmaP:sp1, wavg:wavg1,
+      drop:(risk.sigmaP>0? (risk.sigmaP-sp1)/risk.sigmaP : 0),
+      gridYield:gy1, eff:(sp1>0? gy1/sp1 : 0)});
+  });
+  /* 排序：加入后的「风险效率 = 年化网格收益 ÷ 组合波动」——既要有波动可吃，又要真分散 */
+  list.sort(function(a,b){ return b.eff-a.eff; });
+  /* 只留"加入后风险效率确实更高"的候选；若一个都没有（极端情形）则退回完整排序表 */
+  const better=list.filter(function(x){ return x.eff>risk.eff+1e-9; });
+  const pool=(better.length? better : list);
+  /* 同类别只保留 1 个，避免清单被同类标的占满 */
   const cnt={}, uniq=[];
-  list.forEach(function(x){ cnt[x.cat]=(cnt[x.cat]||0)+1; if(cnt[x.cat]<=1) uniq.push(x); });
-  return {risk:risk, list:uniq, t:t, holds:norm};
+  pool.forEach(function(x){ cnt[x.cat]=(cnt[x.cat]||0)+1; if(cnt[x.cat]<=1) uniq.push(x); });
+  return {risk:risk, list:uniq, t:t, holds:norm, allBetter:(better.length===pool.length)};
 }
 /* 候选标的的"基本回测依据"：拉行情 → 年化波动 / 最大回撤 / 与组合实测ρ / 网格模拟 */
 /* 候选回测缓存（模块级，不写入存档/云端，避免把行情K线带进同步数据） */
@@ -3031,88 +3088,83 @@ function pfNormMembers(d){
 /* 分散度诊断 + 分层标的建议面板 */
 function pfDiversifyHTML(d, bare){
   const PFD=function(inner){ return bare? inner : '<div class="card"><div class="card-body">'+inner+'</div></div>'; };
+  const SEC=function(t,note){ return '<div class="pf-sec"><span class="pf-sec-t">'+t+'</span>'+(note? '<span class="pf-sec-n">'+note+'</span>':'')+'</div>'; };
   const members=pfNormMembers(d);
   if(!members.length){
-    return PFD(`
-      <div style="font-size:13px;font-weight:500;margin-bottom:6px">分散度诊断与标的建议</div>
-      <div class="empty" style="margin-bottom:4px">先在上方确定标的（「＋新增标的」或「＋增加已记录的标的」）。确定后这里会立刻算出 <b>组合年化波动、分散比、成员间相关系数</b>，并给出真正能分层风险的补充标的与回测依据。</div>
-      <div style="font-size:12px;color:var(--muted);margin-top:6px">还没想好选什么？下面是可加入的全量候选范围（含代码，按"从最能分散到最不能"排列），点击任一标签即加入组合。<b>建议先用 2~3 个低相关的大类打底</b>（债券 / 黄金 / 海外），再考虑权益类。</div>
-      ${pfPoolRangeHTML(members)}
-    `);
+    return PFD(SEC("可加入的范围","含具体代码 · 点击标签即加入")
+      + '<div style="font-size:12px;color:var(--muted);margin-bottom:2px">先在「选择标的」里确定成员。下面是网格可用的候选池，按分散能力从强到弱排列：</div>'
+      + pfPoolRangeHTML(members));
   }
   const risk=pfRisk(members);
-  const cats=members.map(x=>{
+  const chips=members.map(function(x){
     const c=symCat(x.g.meta.code, x.g.meta.name), v=symAnnVol(x.g);
-    return `<span class="tag info" style="margin:0 6px 6px 0;display:inline-block">${esc(x.g.meta.name)} · ${SYM_CAT[c].n}${v? " · σ "+pct(v,1):""} · w ${pct(x.w,0)}</span>`;
+    return '<span class="pf-chip" style="cursor:default">'
+      + '<span class="n">'+esc(x.g.meta.name)+'</span>'
+      + '<span class="c">'+x.g.meta.code+'</span>'
+      + '<span class="v">'+SYM_CAT[c].n+'</span>'
+      + '<span class="v">σ'+(v? (v*100).toFixed(1)+'%' : "—")+'</span>'
+      + '<span class="v">w'+(x.w*100).toFixed(0)+'%</span></span>';
   }).join("");
-  const div=risk? risk.divRatio : 1;
-  const divTxt = div<1.05? '<b style="color:#B03021">几乎没有分散</b>——标的高度同向，三档风险只是权重不同'
-              : div<1.20? '<b style="color:#8A6A2F">分散有限</b>——建议再补充低相关标的'
-              : '<b style="color:#2E7D5B">分散良好</b>';
-  const kpiRow = (risk && members.length>=1)? `<div style="display:flex;gap:24px;flex-wrap:wrap;margin:10px 0">
-      <div><div style="font-size:11px;color:var(--muted)">组合年化波动 σ_p</div><div style="font-size:17px;font-weight:500">${pct(risk.sigmaP,1)}</div></div>
-      <div><div style="font-size:11px;color:var(--muted)">加权波动 Σwᵢσᵢ</div><div style="font-size:17px;font-weight:500">${pct(risk.wavg,1)}</div></div>
-      <div><div style="font-size:11px;color:var(--muted)">分散比 Σwσ ÷ σ_p</div><div style="font-size:17px;font-weight:500">${div.toFixed(2)}×</div></div>
-      <div><div style="font-size:11px;color:var(--muted)">平均相关 ρ̄</div><div style="font-size:17px;font-weight:500">${members.length>=2? risk.avgCorr.toFixed(2) : "—"}</div></div>
-    </div>
-    <div class="hint" style="font-size:11.5px">判读：${divTxt}。σ_p = √(ΣΣ wᵢwⱼσᵢσⱼρᵢⱼ)；ρ 优先用共同交易日对数收益实测，样本 < 20 天时退回类型先验。${risk.miss? ' <span style="color:#8A6A2F">其中 '+risk.miss+' 个标的缺行情，σ 按类型兜底。</span>':''}</div>`
-    : `<div class="hint">成员缺行情，暂无法计算组合波动率——可在总览「刷新行情」后回到本页。</div>`;
-  const hi=(risk? risk.pairs : []).filter(p=>p.rho>=0.75).sort((a,b)=>b.rho-a.rho);
-  const hiHTML = members.length<2? "" : (hi.length
-    ? `<div style="margin-top:10px;font-size:12.5px;line-height:1.9;color:#8B2E22"><b>高度同向（ρ ≥ 0.75：几乎等于同一笔风险）</b><br>${hi.map(p=>`· ${esc(members[p.i].g.meta.name)} ↔ ${esc(members[p.j].g.meta.name)}：ρ = <b>${p.rho.toFixed(2)}</b>（${p.src}${p.n? " · "+p.n+" 天":""}${p.note? " · "+p.note:""}）`).join("<br>")}</div>`
-    : `<div style="margin-top:10px;font-size:12.5px;color:#2E7D5B">成员之间没有 ρ ≥ 0.75 的高度同向配对。</div>`);
+  const div=(risk? risk.divRatio : 1);
+  const divTxt=(div<1.05? '<b style="color:#B03021">几乎没有分散</b>：成员高度同向'
+              : div<1.20? '<b style="color:#8A6A2F">分散有限</b>：可再补低相关标的'
+              : '<b style="color:#2E7D5B">分散良好</b>');
+  const kpiRow=(risk && members.length)? '<div class="kpis" style="margin:2px 0 4px">'
+      + '<div class="kpi"><div class="v">'+pct(risk.sigmaP,1)+'</div><div class="l">组合年化波动 σ_p</div></div>'
+      + '<div class="kpi"><div class="v">'+pct(risk.gridYield,2)+'</div><div class="l">年化网格收益（估）</div></div>'
+      + '<div class="kpi"><div class="v">'+risk.eff.toFixed(2)+'</div><div class="l">风险效率 = 收益 ÷ σ_p</div></div>'
+      + '<div class="kpi"><div class="v">'+div.toFixed(2)+'×</div><div class="l">分散比 Σwσ ÷ σ_p</div></div>'
+      + '</div><div class="hint" style="font-size:11.5px">'+divTxt+'。风险效率 = 年化网格收益 ÷ 组合波动，越高表示"承担同样波动能收割到更多网格利润"。'
+      + (risk.miss? ' <span style="color:#8A6A2F">'+risk.miss+' 个标的缺行情，σ 按类型兜底。</span>':'') + '</div>'
+    : '<div class="hint">成员缺行情，暂无法计算——可在总览「刷新行情」后回到本页。</div>';
+  const hi=(risk? risk.pairs : []).filter(function(p){ return p.rho>=0.75; }).sort(function(a,b){ return b.rho-a.rho; });
+  const hiHTML=(members.length<2)? "" : SEC("高度同向的成员对","ρ ≥ 0.75 等于同一笔风险")
+    + (hi.length
+      ? '<div style="font-size:12.5px;line-height:2">'+hi.map(function(p){
+          return '<div>· '+esc(members[p.i].g.meta.name)+' ↔ '+esc(members[p.j].g.meta.name)
+            + ' <b style="color:#8B2E22">ρ='+p.rho.toFixed(2)+'</b> <span style="color:var(--muted);font-size:11.5px">'
+            + p.src+(p.n? ' · '+p.n+' 天':'')+(p.note? ' · '+p.note:'')+'</span></div>'; }).join("")+'</div>'
+      : '<div style="font-size:12.5px;color:#2E7D5B">无（没有 ρ ≥ 0.75 的配对）</div>');
   let sugHTML="";
   if(members.length>=2){
     const sug=pfSuggestList(members, 0.25);
-    const rows=sug.list.slice(0,6).map(x=>`<tr>
-      <td style="padding:5px 8px">${esc(x.name)}</td>
-      <td style="padding:5px 8px;color:var(--muted)">${x.code}</td>
-      <td style="padding:5px 8px">${x.catName}</td>
-      <td style="padding:5px 8px">${x.rhoBar.toFixed(2)}</td>
-      <td style="padding:5px 8px">${pct(x.vol,1)}</td>
-      <td style="padding:5px 8px">${pct(x.sigmaP,1)}</td>
-      <td style="padding:5px 8px;font-weight:500;color:${x.drop>0.10? "#2E7D5B":"#8A6A2F"}">↓${pct(x.drop,1)}</td>
-      <td style="padding:5px 8px"><button class="btn sm ghost" onclick="pfQuickAdd('${x.code}')">加入</button></td>
-    </tr>`).join("");
-    sugHTML=`<div style="margin-top:14px">
-      <div style="font-size:13px;font-weight:500;margin-bottom:6px">建议加入（按 σ 降幅排序 · 假定占 25% 权重，其余按原比例压缩）</div>
-      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:680px">
-        <thead><tr style="color:var(--muted);text-align:left">
-          <th style="padding:5px 8px">名称</th><th style="padding:5px 8px">代码</th><th style="padding:5px 8px">类别</th>
-          <th style="padding:5px 8px">与组合平均 ρ</th><th style="padding:5px 8px">单独波动</th>
-          <th style="padding:5px 8px">加入后 σ_p</th><th style="padding:5px 8px">σ 降幅</th><th style="padding:5px 8px"></th></tr></thead>
-        <tbody>${rows}</tbody></table></div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center">
-        <button class="btn sm" onclick="pfRunCandBt()">${PF_CAND_LOADING? "拉取中…":"拉取候选行情并回测"}</button>
-        <span class="hint" style="font-size:11.5px">回测依据＝用候选的历史日K，按评价规则生成参数后跑一遍网格，给出年化波动 / 区间最大回撤 / 与组合成员的实测 ρ。</span>
-      </div>
-      ${pfCandBtHTML()}
-    </div>`;
+    const rows=sug.list.slice(0,6).map(function(x){
+      const better=(risk && x.eff>risk.eff);
+      return '<tr>'
+        + '<td style="padding:6px 8px"><div style="font-weight:500">'+esc(x.name)+'</div><div style="font-size:11px;color:var(--muted)">'+x.code+'</div></td>'
+        + '<td style="padding:6px 8px;color:var(--muted)">'+x.catName+'</td>'
+        + '<td style="padding:6px 8px">'+pct(x.vol,1)+'</td>'
+        + '<td style="padding:6px 8px">'+x.rhoBar.toFixed(2)+'</td>'
+        + '<td style="padding:6px 8px">'+pct(x.sigmaP,1)+'</td>'
+        + '<td style="padding:6px 8px">'+pct(x.gridYield,2)+'</td>'
+        + '<td style="padding:6px 8px;font-weight:600;color:'+(better? "#2E7D5B":"#8A6A2F")+'">'+x.eff.toFixed(2)+'</td>'
+        + '<td style="padding:6px 8px"><button class="btn sm ghost" onclick="pfQuickAdd(\''+x.code+'\')">加入</button></td>'
+        + '</tr>';
+    }).join("");
+    sugHTML=SEC("建议加入","按加入后的风险效率排序 · 假定占 25% 权重")
+      + '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:720px">'
+      + '<thead><tr style="color:var(--muted);text-align:left">'
+      + '<th style="padding:6px 8px">候选</th><th style="padding:6px 8px">类别</th><th style="padding:6px 8px">波动 σ</th>'
+      + '<th style="padding:6px 8px">与组合 ρ̄</th><th style="padding:6px 8px">加入后 σ_p</th>'
+      + '<th style="padding:6px 8px">加入后网格收益</th><th style="padding:6px 8px">风险效率</th><th style="padding:6px 8px"></th>'
+      + '</tr></thead><tbody>'+rows+'</tbody></table></div>'
+      + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center">'
+      + '<button class="btn sm" onclick="pfRunCandBt()">'+(PF_CAND_LOADING? "拉取中…":"拉取候选行情并回测")+'</button>'
+      + '<span class="hint" style="font-size:11.5px">用候选历史日K按评价规则跑一遍网格，给出实测波动 / 最大回撤 / 与成员的实测 ρ。</span></div>'
+      + pfCandBtHTML();
   } else {
-    const single=members[0], c=symCat(single.g.meta.code, single.g.meta.name);
-    const order = (c==="industry"||c==="stock")
-        ? "先补大类（债券 / 黄金 / 海外），再换风格（红利低波）——<b>不要在同一赛道里再加第二个标的</b>，那只会让风险翻倍而不是分散。"
-      : (c==="broad_growth")
-        ? "先补大类（债券 / 黄金 / 海外），再考虑红利低波（σ 更低，用来压低组合波动）。"
-      : (c==="broad_large"||c==="broad_mid")
-        ? "先补与 A 股低相关的债券 / 黄金 / 海外；红利低波虽同为 A 股，只能起到部分分散。"
-      : (c==="dividend")
-        ? "先补债券 / 黄金 / 海外美股。"
-      : (c==="bond"||c==="gold")
-        ? "已是低相关资产，可再补一类不同的大类（如另一侧的黄金 / 债券），以及宽基来承载收益。"
-        : "先补宽基大盘（沪深300 / 上证50），再补债券与黄金。";
-    sugHTML=`<div style="margin-top:10px;font-size:12.5px;line-height:1.9">你目前选的是 <b>${SYM_CAT[c].n}</b>。单个标的没有分散可言。建议顺序：${order}<br><span style="color:var(--muted)">再加入 1 个成员后，这里会按 σ 降幅给出排序与回测依据。</span></div>`;
+    const single=members[0];
+    sugHTML=SEC("建议加入","先再加 1 个成员才能排序")
+      + '<div style="font-size:12.5px;line-height:1.8">当前只有 <b>'+SYM_CAT[symCat(single.g.meta.code, single.g.meta.name)].n
+      + '</b> 一个成员，谈不上分散。先补一类低相关的大类（黄金 / 海外 / 商品），再考虑换风格。</div>';
   }
-  return PFD(`
-    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;align-items:baseline">
-      <div style="font-size:13px;font-weight:500">分散度诊断与标的建议</div>
-      <div style="font-size:11.5px;color:var(--muted)">${members.length} 个成员 · 权重按当前设置归一化</div></div>
-    <div style="margin-top:8px">${cats}</div>
-    ${kpiRow}
-    ${hiHTML}
-    ${sugHTML}
-    ${pfPoolRangeHTML(members)}
-  `);
+  return PFD(
+    SEC("组合构成", members.length+" 个成员 · 权重已归一化") + '<div>'+chips+'</div>'
+    + SEC("风险与收益", "σ 取实测，缺失时用类型先验") + kpiRow
+    + hiHTML
+    + sugHTML
+    + SEC("可加入的范围", "含具体代码 · 点击标签即加入") + pfPoolRangeHTML(members)
+  );
 }
 /* 候选回测结果表 */
 function pfCandBtHTML(){
