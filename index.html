@@ -2969,7 +2969,10 @@ function pfNormMembers(d){
 function pfDiversifyHTML(d){
   const members=pfNormMembers(d);
   if(!members.length){
-    return `<div class="card"><div class="card-body"><div class="empty">先在上方确定标的（「＋新增标的」或「＋增加已记录的标的」）。确定后这里会立刻算出 <b>组合年化波动、分散比、成员间相关系数</b>，并给出真正能分层风险的补充标的与回测依据。</div></div></div>`;
+    return `<div class="card"><div class="card-body">
+      <div style="font-size:13px;font-weight:500;margin-bottom:6px">分散度诊断与标的建议</div>
+      <div class="empty">先在上方确定标的（「＋新增标的」或「＋增加已记录的标的」）。确定后这里会立刻算出 <b>组合年化波动、分散比、成员间相关系数</b>，并给出真正能分层风险的补充标的与回测依据。</div>
+    </div></div>`;
   }
   const risk=pfRisk(members);
   const cats=members.map(x=>{
