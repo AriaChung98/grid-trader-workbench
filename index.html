@@ -373,6 +373,12 @@ tbody tr:hover{background:#FBFAF7}
 .pf-zone .pfmem{padding:7px 0}
 .pf-zone .pfmem .sub{font-size:11px}
 /* 组合页步骤卡：统一卡头（编号 + 标题 + 说明），与工作台其它 .card 同风格 */
+/* 组合成员：初始计划分配资金说明条 */
+.alloc-note{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:10px 0 2px;padding:9px 12px;background:var(--paper);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:6px;font-size:12.5px;line-height:1.7}
+.alloc-note .an-lbl{color:var(--muted)}
+.alloc-note .an-v{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink)}
+.alloc-note .an-s{color:var(--muted)}
+@media (max-width:760px){ .alloc-note{font-size:12px;padding:8px 10px;gap:6px} .alloc-note .an-v{font-size:14px} }
 .pf-step{margin-top:14px}
 .pf-step .card{margin-top:0}
 .pf-step .card-body{padding:14px 16px}
@@ -1679,7 +1685,9 @@ function recalcDerived(d, kline){
     if(sp){ d.startPrice=round(sp,3); }
   }
   if(d.startPrice>0 && d.initCapital>0){
-    const sug=Math.ceil((d.initCapital/2/d.startPrice)/100)*100;
+    /* 与 paramRule 口径统一：底仓 = 资金×50% ÷ 期初价，整手向下（原为 ceil，与评价规则的 floor 不一致，
+       会出现"规则说 2600 股、表单显示 2700 股"）。 */
+    const sug=Math.max(100, Math.floor((d.initCapital/2/d.startPrice)/100)*100);
     if(!d.targetBaseCost || d._autoBase){ d.targetBaseCost=sug; d._autoBase=true; }
   }
   /* 持仓控制上下限随格数与底仓自动（可手动覆盖：posMinQty/posMaxQty 字段，覆盖后置 _autoPosMin/_autoPosMax=false） */
@@ -2540,6 +2548,27 @@ document.addEventListener("click", ev=>{
 /* 数据：state.portfolios = [{id, name, totalCapital, members:[{gridId, weight}], createdAt}] */
 function pfList(){ return (state.portfolios && Array.isArray(state.portfolios))? state.portfolios : []; }
 function getPf(id){ return pfList().find(p=>p.id===id)||null; }
+/* 该标的所属的组合与成员记录（含未保存的组合草稿）——用于展示"计划分配资金/占总投入" */
+function pfOwnerOfGrid(gid){
+  const cands=pfList().concat(state.pfDraft? [state.pfDraft] : []);
+  for(let i=0;i<cands.length;i++){
+    const mem=(cands[i].members||[]).find(m=>m.gridId===gid);
+    if(mem) return {pf:cands[i], mem:mem};
+  }
+  return null;
+}
+/* 该标的的计划分配资金（来自组合成员行的「计划资金」） */
+function pfPlanOfGrid(gid){
+  const own=pfOwnerOfGrid(gid);
+  return own? Math.max(0, Number(own.mem.plan)||0) : 0;
+}
+/* 组合的"总投入" = 已纳入成员的计划资金合计；都未填时退回 totalCapital */
+function pfPlannedTotal(pf){
+  if(!pf) return 0;
+  const on=(pf.members||[]).filter(m=>m.on!==false);
+  const sum=on.reduce((a,m)=>a+(Number(m.plan)||0), 0);
+  return sum>0? sum : (Number(pf.totalCapital)||0);
+}
 /* 标的是否已被任一已保存的资产组合纳入（用于总览自动去重与隐藏） */
 function pfMembersOfGrid(gid){
   return pfList().some(pf => (pf.members||[]).some(m=>m.gridId===gid));
@@ -3364,7 +3393,7 @@ function pfQuickAdd(code){
     const g=makeGrid({ meta:{code:norm, name: sameCnt>0? nm+" #"+(sameCnt+1) : nm},
       cond:params, trades:[], pricePath:(m.kline||[]).map(x=>({date:x.date, close:x.close})), market:m, _sample:false });
     g._pfNew=true; g._include=false; g.cond.configured=false;
-    try{ g.cond.history[0].note="组合分散化候选（行情推荐 · 待建仓）"; }catch(e){}
+    g.cond.history=[];   /* 尚未生效 → 不写入条件单版本（避免出现在"历史条件单参数"中） */
     state.grids.push(g);
     d.members.push({gridId:g.id, on:true, weight:0, rec:false, plan:plan});
     try{ pfSyncW(d, null); }catch(e){}
@@ -3584,7 +3613,9 @@ function pfAddNewMember(){
     g._pfNew=true;
     g._include=false;   /* 新增的组合标的 → 自动从总览网格勾选移除 */
     g.cond.configured=false;   /* 待建仓：推荐只给出网格"方案"，条件单保持未建立——由用户在详情页自行决定是否锁定 */
-    g.cond.history[0].note="新增组合标的（行情推荐 · 待建仓）";
+    /* 尚未生效 → 不写入任何条件单版本（否则会被当成"历史条件单参数"显示出来）。
+       cond.params 仍保留为"拟定方案"，供点「新建条件单」时按计划分配资金预填。 */
+    g.cond.history=[];
     state.grids.push(g);
     d.members.push({gridId:g.id, on:true, weight:0, rec:false, plan});
     pfSyncW(d, null);   // 新增后让"自动"权重成员按剩余 100%−手动 配平
@@ -3910,7 +3941,7 @@ function lotRound(n){
 function blankCondMoney(d){ if(d){ d.initCapital=undefined; d.qtyPerTrade=undefined; } }
 function pfSchemeText(g, need, a){
   const p=g.cond.params;
-  if(!isConfigured(g) || !(p.spacingPct>0)) return "待补充条件单";
+  if(!isConfigured(g) || !(p.spacingPct>0)) return "尚未建立条件单";
   const scale=(need>0)? a/need : 1;
   const q=lotRound(p.qtyPerTrade*scale);
   return `间距 ${pct(p.spacingPct,1)} · 上${p.upGrids}/下${p.downGrids} 格 · 每笔 ${fmt(q,0)} 股（100 股/手）`;
@@ -4560,7 +4591,7 @@ function renderOverview(){
         ? `最新基准 <b>¥${fmt(base,3)}</b> · 间距 <b>${pct(c.spacingPct,2)}</b> · 上<b>${c.upGrids}</b>/下<b>${c.downGrids}</b> 格<br>
         每笔 <b>${fmt(c.qtyPerTrade,0)}</b> · 资金 <b>¥${fmt(c.initCapital,0)}</b> · 区间 ¥${fmt(gl.lower,3)}~${fmt(gl.upper,3)}<br>
         现价 <b class="${signClass(sm.cur-c.startPrice)}">¥${fmt(sm.cur,3)}</b>`
-        : `<b>建仓阶段（待补充条件单）</b><br>
+        : `<b>建仓阶段（尚未建立条件单）</b><br>
         已投入 <b>¥${fmt(sm.cumBuyAmt - sm.cumSellAmt,0)}</b> · 现价 <b class="${signClass(sm.cur-c.startPrice)}">¥${fmt(sm.cur,3)}</b><br>
         建仓 ${g.trades.filter(t=>t.type==="建仓").length} 笔 · 待设网格`}</div>
       <div class="profit ${signClass(sm.totalProfit)}">${fmt(sm.totalProfit,2)}<div style="font-size:11px;color:var(--muted);font-weight:400">真实利润</div>
@@ -4573,7 +4604,7 @@ function renderOverview(){
         ${inPf? `<button class="btn sm ghost" onclick="openPfGrid('${g.id}')">查看所属组合</button>` : ""}
         ${cfg
           ? `<button class="btn sm lock" onclick="openGridEdit('${g.id}')">修改条件单</button>`
-          : `<button class="btn sm lock" onclick="editCond('${g.id}')">补充条件单参数</button>`}
+          : `<button class="btn sm lock" onclick="editCond('${g.id}')">新建条件单</button>`}
         <button class="btn sm danger" onclick="delGrid('${g.id}')">删除网格</button>
       </div>
     </div>`;
@@ -4741,7 +4772,7 @@ function renderBandGlobal(sums){
     const gItems=[];
     const push=(t)=>gItems.push(t);
     if(isStopped(g)){ push(`<span class="tag stopped">${g.meta.code} 已停止</span> 网格已于 ${g.stop.date} 停止，收益与天数已冻结。`); }
-    else if(!isConfigured(g)){ push(`<span class="tag info">${g.meta.code} 建仓阶段</span> 尚未设置网格条件单，暂无需处理；请先录入建仓交易，再点「补充条件单参数」。`); }
+    else if(!isConfigured(g)){ push(`<span class="tag info">${g.meta.code} 建仓阶段</span> 尚未设置网格条件单，暂无需处理；请先录入建仓交易，再点「新建条件单」。`); }
     else {
       const trig=gridTriggerStatus(g,cur);
       const todaysGrid = g.trades.filter(t=>t.date===todayISO() && (t.type==='买入'||t.type==='卖出'));
@@ -4788,6 +4819,21 @@ function renderDetail(g){
     </div>
     ${pfsOfGrid.length? `<div class="ds-pf"><span class="ds-pf-lbl">所属组合</span>${pfsOfGrid.map(p=>`<button class="ds-pf-tag" onclick="state._pfFrom='${g.id}';openPf('${p.id}')">${p.name}</button>`).join("")}</div>`:""}
   </div>`;
+
+  // 组合成员：初始计划分配资金 / 占总投入（决定该标的的条件单按多少钱派生）
+  const own = pfOwnerOfGrid(g.id);
+  const planCap = own? Math.max(0, Number(own.mem.plan)||0) : 0;
+  const planTotal = own? pfPlannedTotal(own.pf) : 0;
+  const planPct = (planCap>0 && planTotal>0)? planCap/planTotal : 0;
+  const allocNote = own ? `
+  <div class="alloc-note">
+    <span class="an-lbl">本标的初始计划分配资金</span>
+    <span class="an-v">${planCap>0? "¥"+fmt(planCap,2) : "尚未填写"}</span>
+    <span class="an-s">${planCap>0
+      ? `占组合「${esc(own.pf.name)}」总投入 ¥${fmt(planTotal,2)} 的 <b>${pct(planPct,1)}</b>`
+      : `请在组合「${esc(own.pf.name)}」的成员行填写计划资金后，条件单会按该金额自动拟定`}</span>
+    ${!isConfigured(g)? '<span class="tag info">建仓阶段</span>' : (isStopped(g)? `<span class="tag stopped">已停止</span>` : (isPaused(g)? '<span class="tag warn">已暂停</span>' : ''))}
+  </div>` : "";
 
   // 持仓占比 + 穿轨风险 合并为「持仓-网格耦合」单图（价格轴共享：价格越往下格→买入越多→持仓占比越高）
   const hrMv = sm.gridPos * sm.cur;
@@ -4898,6 +4944,7 @@ function renderDetail(g){
 
   return `
   ${stickyBar}
+  ${allocNote}
   ${band}
 
   <section class="section">
@@ -4930,7 +4977,7 @@ function renderDetail(g){
           </div>`
             : `<div class="v" style="color:var(--muted)">建仓阶段</div>
           <div class="subs">
-            <div><span>待补充条件单</span><b>—</b></div>
+            <div><span>尚未建立条件单</span><b>—</b></div>
             <div><span>暂无网格成交</span><b>—</b></div>
           </div>`}
         </div>
@@ -4945,7 +4992,7 @@ function renderDetail(g){
       </div>
     </div>
     ${hrBlock}
-    ${isConfigured(g)? renderNextTrigger(g) : `<div class="hint" style="background:#F7F5EF">建仓阶段：尚未设置条件单，无法计算触发价。请先录入「建仓」交易，完成后点「补充条件单参数」。</div>`}
+    ${isConfigured(g)? renderNextTrigger(g) : `<div class="hint" style="background:#F7F5EF">建仓阶段：尚未设置条件单，无法计算触发价。请先录入「建仓」交易，完成后点「新建条件单」。</div>`}
   </section>
 
   <section class="section">
@@ -5007,11 +5054,11 @@ function renderDetail(g){
   </section>
 
   <section class="section">
-    <div class="lab"><span class="t">④ ${g.meta.name} · ${isConfigured(g)?`条件单（锁定）${isStopped(g)?` <span class="tag stopped">已停止 · ${g.stop.date}</span>`:""}${isPaused(g)?` <span class="tag warn">已暂停 · 调底仓中</span>`:""}`:`建仓阶段（待补充条件单）`}</span>
+    <div class="lab"><span class="t">④ ${g.meta.name} · ${isConfigured(g)?`条件单（锁定）${isStopped(g)?` <span class="tag stopped">已停止 · ${g.stop.date}</span>`:""}${isPaused(g)?` <span class="tag warn">已暂停 · 调底仓中</span>`:""}`:`建仓阶段（尚未建立条件单）`}</span>
       <span><button class="btn sm ghost" onclick="renameGrid('${g.id}')">重命名</button>
       ${isConfigured(g)
         ? `<button class="btn sm lock" onclick="editCond('${g.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="9" rx="1"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>修改条件单</button>`
-        : `<button class="btn sm lock" onclick="editCond('${g.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="9" rx="1"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>补充条件单参数</button>`}
+        : `<button class="btn sm lock" onclick="editCond('${g.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="9" rx="1"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>新建条件单</button>`}
       ${isConfigured(g) && !isStopped(g) ? (isPaused(g)
         ? `<button class="btn sm resume" onclick="resumePause('${g.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l12 8-12 8z"/></svg>恢复委托</button>`
         : `<button class="btn sm ghost" onclick="pauseGrid('${g.id}')" data-tip="调整底仓期间临时暂停提交买卖委托（不冻结收益/市值，可随时恢复）。">暂停网格 · 调底仓</button>`) : ""}
@@ -5030,12 +5077,12 @@ function renderDetail(g){
           : isPaused(g)
             ? `网格已暂停（<b>${g.paused.date||"—"}</b>）：<b>不提交买卖委托</b>，用于调整底仓——先改好底仓（建议在条件单表单同步「已完成建仓」实际持仓），确认后点「恢复委托」。暂停不影响收益统计，但期间行情波动不会触发成交。`
             : `网格上限 ¥${fmt(gl.upper,3)} · 下限 ¥${fmt(gl.lower,3)} · 每格价差 ¥${fmt(c.basePrice*c.spacingPct,3)} · 上${c.upGrids}/下${c.downGrids} 格（非对称）。当前价 ¥${fmt(sm.cur,3)}。`)
-      : `<b>建仓阶段</b>：尚未设置条件单，无法叠加网格线。请先录入「建仓」交易，完成后点「补充条件单参数」。`}</div>
+      : `<b>建仓阶段</b>：尚未设置条件单，无法叠加网格线。请先录入「建仓」交易，完成后点「新建条件单」。`}</div>
   </section>
 
   <section class="section">
-    <div class="lab"><span class="t">⑤ 历史条件单参数</span></div>
-    ${renderHistory(g)}
+    <div class="lab"><span class="t">⑤ ${isConfigured(g)? "历史条件单参数" : "条件单参数"}</span>${isConfigured(g)? "" : '<span>尚未生效</span>'}</div>
+    ${isConfigured(g)? renderHistory(g) : `<div class="empty">尚未建立条件单 · 当前<b>没有任何生效参数</b>，网格不运行、不会触发任何买卖。${planCap>0? `已按计划分配资金 ¥${fmt(planCap,2)} 记录（见上方说明条）。` : ""}完成建仓后点 ④ 的「新建条件单」，系统会按该资金自动拟定基准价 / 间距 / 格数 / 每笔 / 底仓。</div>`}
   </section>
 
   <section class="section">
@@ -5061,8 +5108,12 @@ function renderEditCond(g){
   }).join("");
   const gl = gridLevels(d);
   const diagBlock = `<div id="cdEdit" class="cd-wrap">${condDiagHTML(g._draft, closesForDiag(g), g.id, rawSeriesOf(g))}</div>`;
+  const planNote = (g._setupMode && g._draftFromPlan>0)
+    ? `<div class="hint" style="margin-top:0;margin-bottom:10px;color:#2E7D5B">已按本标的的<b>计划分配资金 ¥${fmt(g._draftFromPlan,2)}</b> 与评价规则自动拟定：<b>基准价</b>取当前价 → <b>覆盖宽度</b>取年化波动 → <b>格数</b>由资金÷单笔金额下限(¥2,100)决定 → <b>间距</b>反推 → <b>每笔股数</b>按各下行格价格之和反推 → <b>底仓</b>=资金×50%。可直接修改；改动某一项后该项即转为「手动」。</div>`
+    : "";
   return `<div class="optbox" style="margin-top:14px">
-    <h3>${g._setupMode? "补充条件单参数（初次设置 · 即时重测）" : "修改条件单（保留历史 · 即时重测）"}</h3>
+    <h3>${g._setupMode? "新建条件单（初次设置 · 即时重测）" : "修改条件单（保留历史 · 即时重测）"}</h3>
+    ${planNote}
     <div class="pline">${fields}</div>
     ${baseBuiltChkHTML(g)}
     ${capFieldsHTML(d, `onDraftInput('${g.id}',event)`)}
@@ -5262,7 +5313,7 @@ function renderBandGrid(g, sm, posHold){
   if(!isConfigured(g)){
     const built=g.trades.filter(t=>t.type==="建仓").length;
     return `<div class="band"><div class="ttl"><span>今天要处理</span><span class="ttl-sub">${g.meta.name}</span></div>
-      <div class="row">${icon}<div><span class="tag info">建仓阶段</span> 尚未设置网格条件单，暂无需处理触发。已录入 <b>${built}</b> 笔建仓交易，待建仓完成后点「补充条件单参数」即可开始网格运行。</div></div></div>`;
+      <div class="row">${icon}<div><span class="tag info">建仓阶段</span> 尚未设置网格条件单，暂无需处理触发。已录入 <b>${built}</b> 笔建仓交易，待建仓完成后点「新建条件单」即可开始网格运行。</div></div></div>`;
   }
   if(isStopped(g)){
     return `<div class="band"><div class="ttl"><span>今天要处理</span><span class="ttl-sub">${g.meta.name}</span></div>
@@ -5537,7 +5588,7 @@ function renderPortfolioDetail(pf){
       + (isStopped(m.g)? '<span class="tag stopped">已停止</span>' : "");
     const condTxt = isConfigured(m.g)
       ? "间距 "+pct(p.spacingPct,1)+" · 上"+p.upGrids+"/下"+p.downGrids+" · 每笔 "+fmt(p.qtyPerTrade,0)
-      : "待补充条件单";
+      : "尚未建立条件单";
     const pCls = simProf==null? "" : signClass(simProf);
     return '<div class="ovrow" style="cursor:pointer" onclick="openPfMember(\''+m.g.id+'\')">'
       + '<div class="sel"></div>'
@@ -5848,9 +5899,36 @@ function editCond(id){
     g._draft=clone(g.cond.params); g._draft.modifyDate=todayISO();
   } else {
     // 建仓阶段补充条件单：用推荐值预填网格字段，保留已有资金/费率/启动日
-    const rec=recommend(g.market, g.cond.params.currentPrice);
-    g._draft=Object.assign({}, g.cond.params, rec, {currentPrice:g.cond.params.currentPrice, modifyDate:todayISO()});
-    g._draft.initCapital=undefined; g._draft.qtyPerTrade=undefined;   // 首次设置不预填资金/数量，避免忘记改
+    /* 建仓阶段「新建条件单」：
+       ① 若该标的属于某资产组合且成员行已填「计划分配资金」→ 直接按评价规则自动拟定全部参数
+          （基准价取当前价 → σ=日波动×√242 → 覆盖宽度 W=clamp(σ,12%,55%) → 格数 N=资金÷单笔下限¥2100
+             → 间距 sp=1−(1−W)^(1/N) → 每笔股数=网格资金÷Σ各下行格价格，底仓=资金×50%），用户可直接改；
+       ② 无计划资金（独立网格）→ 网格字段用行情推荐预填，资金/每笔留空避免忘记改。 */
+    const p0=Object.assign({}, g.cond.params||{});
+    const base=round((g.market && g.market.price) || p0.currentPrice || p0.basePrice || 0, 3);
+    const plan=pfPlanOfGrid(g.id);
+    const fresh=!(g.trades && g.trades.length);   // 尚未录入任何成交 → 网格从"现在"启动，期初价=现价
+    const kl=(g.market? g.market.kline : g.pricePath);
+    let fromPlan=0;
+    if(plan>0 && base>0){
+      const r=paramRule({basePrice:base, initCapital:plan,
+        feeRate:(p0.feeRate!=null? p0.feeRate:0.0001), minFee:(p0.minFee!=null? p0.minFee:5), currentPrice:base}, g.market, kl);
+      g._draft=Object.assign({}, p0, {
+        basePrice:base, currentPrice:base, initCapital:Math.round(plan),
+        spacingPct:(r? r.sp : p0.spacingPct), upGrids:(r? r.N : p0.upGrids), downGrids:(r? r.N : p0.downGrids),
+        qtyPerTrade:(r? r.q : p0.qtyPerTrade), targetBaseCost:(r? r.bq : p0.targetBaseCost),
+        startDate: fresh? todayISO() : (p0.startDate||todayISO()),
+        startPrice: fresh? base : p0.startPrice,   // 期初价跟现价走，否则底仓会按旧价估算而与规则不符
+        modifyDate:todayISO(),
+        _autoSp:true, _autoGrids:true, _autoQty:true, _autoBase:true, _rule:(r||null)
+      });
+      fromPlan=plan;
+    } else {
+      const rec=recommend(g.market, base||p0.currentPrice);
+      g._draft=Object.assign({}, p0, rec, {currentPrice:(base||p0.currentPrice), modifyDate:todayISO()});
+      g._draft.initCapital=undefined; g._draft.qtyPerTrade=undefined;   // 无计划资金：不预填金额，避免忘记改
+    }
+    g._draftFromPlan=fromPlan;
     g._setupMode=true;
   }
   $("view").innerHTML=renderDetail(g); bindDetail(g);
@@ -6027,12 +6105,13 @@ function applyCond(id){
   g._draft.qtyPerTrade=lotRound(g._draft.qtyPerTrade);
   if(!g._draft.modifyDate) g._draft.modifyDate = todayISO();
   const isSetup=!!g._setupMode;
-  confirmModal(isSetup?"补充条件单参数":"应用修改条件单","将"+(isSetup?"完成首次条件单设置":"把当前条件单存为历史")+"，并锁定新参数（基准 ¥"+fmt(g._draft.basePrice,3)+" · 间距 "+pct(g._draft.spacingPct,2)+" · 上"+g._draft.upGrids+"/下"+g._draft.downGrids+" 格 · 设置日期 "+g._draft.modifyDate+"）。确认？",()=>{
-    g.cond.history.push({params:clone(g._draft), setAt:g._draft.modifyDate, note: isSetup?"初次设置（补充条件单）":"修改"});
+  confirmModal(isSetup?"新建条件单":"应用修改条件单","将"+(isSetup?"完成首次条件单设置":"把当前条件单存为历史")+"，并锁定新参数（基准 ¥"+fmt(g._draft.basePrice,3)+" · 间距 "+pct(g._draft.spacingPct,2)+" · 上"+g._draft.upGrids+"/下"+g._draft.downGrids+" 格 · 设置日期 "+g._draft.modifyDate+"）。确认？",()=>{
+    if(isSetup) g.cond.history=(g.cond.history||[]).filter(h=>!h._pending);   // 丢弃"拟定方案"占位，避免被当成一条历史版本
+    g.cond.history.push({params:clone(g._draft), setAt:g._draft.modifyDate, note: isSetup?"初次设置（新建条件单）":"修改"});
     g.cond.params=clone(g._draft);
     g.cond.configured=true;       // 建仓阶段 → 已配置
     g._editing=false; g._draft=null; g._setupMode=false; save();
-    $("view").innerHTML=renderDetail(g); bindDetail(g); toast(isSetup?"已补充条件单参数，网格开始运行":"已应用修改，历史已保留");
+    $("view").innerHTML=renderDetail(g); bindDetail(g); toast(isSetup?"已新建条件单，网格开始运行":"已应用修改，历史已保留");
   });
 }
 
@@ -6136,7 +6215,7 @@ function confirmNew(){
   state.creating=null; state.activeId=g.id; save();
   render(); toast("网格已建立并锁定条件单");
 }
-/* 暂时跳过条件单：先以「建仓阶段」建立网格（保留资金/费率为占位或推荐值），网格字段留空待「补充条件单参数」填写 */
+/* 暂时跳过条件单：先以「建仓阶段」建立网格（保留资金/费率为占位或推荐值），网格字段留空待「新建条件单」填写 */
 function confirmNewSkip(){
   const cr=state.creating; if(!cr) return;
   const now=todayISO(), price=cr.price||0;
@@ -6148,7 +6227,7 @@ function confirmNewSkip(){
     startDate: src.startDate||now,
     startPrice: round(price,3)||src.startPrice||0,
     currentPrice: round(price,3)||src.currentPrice||0,
-    // 网格字段留待「补充条件单参数」填写
+    // 网格字段留待「新建条件单」填写
     basePrice:0, spacingPct:0, upGrids:0, downGrids:0, qtyPerTrade:0, targetBaseCost:0
   };
   const g = makeGrid({
@@ -6161,7 +6240,7 @@ function confirmNewSkip(){
   g.cond.history=[];              // 尚无条件单版本，待补充时写入
   state.grids.push(g);
   state.creating=null; state.activeId=g.id; save();
-  render(); toast("网格已创建（建仓阶段）· 请先录入建仓交易，随后点「补充条件单参数」");
+  render(); toast("网格已创建（建仓阶段）· 请先录入建仓交易，随后点「新建条件单」");
 }
 
 /* ============ 删除网格 ============ */
