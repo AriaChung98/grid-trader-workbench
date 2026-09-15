@@ -1742,6 +1742,20 @@ function condCoverHTML(d, kline, market, ownerId){
     const idle=C-cost;
     seg.push(`占用 ¥${fmt(cost,0)} / 资金 ¥${fmt(C,0)}` + (idle>=0? `，余 ¥${fmt(idle,0)}` : `，<b style="color:#B03021">超 ¥${fmt(-idle,0)}</b>`));
   }
+  /* 可触发性：间距 ÷ 日波动率 ≈ 每格平均触发间隔（交易日）；间距 > 3×日波动 → 触发偏慢（与 recommend 的兜底规则一致） */
+  let dv=(market && market.dailyVol>0)? market.dailyVol : null;
+  if(dv==null && kline && kline.length>1){
+    try{ const vc=buildVolCloses(kline, d.currentPrice); if(vc&&vc.length>=40){ const v=volFromCloses(vc).dailyVol; if(v>0) dv=v; } }catch(e){}
+  }
+  if(dv>0){
+    const days=sp/dv, slow=(sp>dv*3);
+    seg.push(`可触发性：日波动 ${pct(dv,2)} ⟹ 每格约 <b>${days.toFixed(1)}</b> 交易日触发一次${slow? '（<b style="color:#B03021">间距已超日波动 3 倍，触发偏慢</b>）':''}`);
+  }
+  /* 资金利用率：建仓即投入多少，其余要等下跌逐格投入；跌到下轨才用满 */
+  if(C>0 && bq>0){
+    const hold0=base*bq;
+    seg.push(`资金利用率：建仓即投入 <b>${pct(hold0/C,0)}</b>${dn>0? `，跌到 ¥${fmt(lower,3)} 才用满`:""}`);
+  }
   const autoQ = d._autoQty!==false;
   const toggle = ownerId? ` <button class="btn ghost mini" onclick="toggleQtyAuto('${ownerId}')">${autoQ?"改手动":"恢复自动"}</button>` : "";
   return `<div class="hint" style="margin-top:6px">网格依据：${seg.join("；")}。<span class="tag ${autoQ?"ok":"info"}">每笔${autoQ?"自动":"手动"}</span>${toggle}</div>`;
@@ -2217,7 +2231,7 @@ function profitColInner(prm, src, owner){
   const btn = owner? ` <button class="btn ghost mini" onclick="applySugToCond('${owner}',{spacingPct:${b.spacingPct},upGrids:${b.upGrids},downGrids:${b.downGrids},qtyPerTrade:${b.qtyPerTrade}})">填入</button>` : "";
   return {html:`<div class="cd-adv">
     <div data-tip="收益优先方案：在资金上限(初始×1.03)与轨道覆盖约束内，扫描使落袋网格收益 vGrid（口径同①）最大的参数组合；种子=当前参数，保证结果不差于现状。">收益参数：间距 <b>${pct(b.spacingPct,1)}</b> · 上/下 <b>${b.upGrids}/${b.downGrids}</b> · 每笔 <b>${fmt(b.qtyPerTrade,0)}</b>${btn}</div>
-    <div data-tip="落袋网格收益 vGrid：当前 → 收益最优（同一段行情、同一估值价、同①口径）。">网格收益：<b>${fmt(curV,0)}</b> → <b class="${signClass(diff)}">${fmt(sc.bestScore,0)}</b>（Δ <b class="${signClass(diff)}">${fmt(diff,0)}</b>）</div>
+    <div data-tip="落袋网格收益 vGrid：当前 → 收益最优（同一段行情、同一估值价、同①口径）。">网格收益：<b>${fmt(curV,2)}</b> → <b class="${signClass(diff)}">${fmt(sc.bestScore,2)}</b>（Δ <b class="${signClass(diff)}">${fmt(diff,2)}</b>）</div>
     <div class="cd-dim" style="margin-top:2px">总收益率 ${pct(simB.overall,2)}${fTxt? " · "+fTxt : ""} · 满仓需资金 ¥${fmt(need,0)}${initN>0? "（初始 ¥"+fmt(initN,0)+"）":""}${need>initN&&initN>0? "，略超":""} · 历史最优≠未来最优</div>
   </div>`,b:b};
 }
@@ -2240,14 +2254,14 @@ function feeRowHTML(label, fr, curFr){
   let delta="";
   if(curFr && curFr.ratio>fr.ratio+1e-9) delta=" ↓较当前省";
   else if(curFr && curFr.ratio<fr.ratio-1e-9) delta=" ↑较当前增";
-  return `<div class="cd-fee-row ${tone}"><span>${label}</span><span>¥${fmt(fr.gross,0)}</span><span>¥${fmt(fr.fee,1)}</span><span>${pct(fr.ratio,1)}%${delta}</span><span>¥${fmt(fr.net,0)}</span></div>`;
+  return `<div class="cd-fee-row ${tone}"><span>${label}</span><span>¥${fmt(fr.gross,2)}</span><span>¥${fmt(fr.fee,2)}</span><span>${pct(fr.ratio,1)}%${delta}</span><span>¥${fmt(fr.net,2)}</span></div>`;
 }
 function feeVerdictHTML(cur, sug, prof){
   if(!cur) return `<div class="cd-fee-v">参数不全，无法判断手续费占比与是否需调整。</div>`;
   const r=cur.ratio;
   let main;
   if(cur.minDom){
-    main = (r>=0.25? `当前手续费占比偏高（${pct(r,1)}）` : `当前手续费占比（${pct(r,1)}）已受最低 ¥${fmt(cur.fee,0)} 手续费主导`)
+    main = (r>=0.25? `当前手续费占比偏高（${pct(r,1)}）` : `当前手续费占比（${pct(r,1)}）已受最低 ¥${fmt(cur.fee,2)} 手续费主导`)
       + ` → 建议<b>增大每笔数量</b>（让单笔金额明显高于最低费阈值，费率才起主要作用、占比即大幅下降）；非必须也可配合调宽间距。`;
   } else if(r>=0.25){
     main = `当前手续费占比偏高（${pct(r,1)}）：间距过细、费率主导 → 建议<b>调宽网格间距</b>（间距越大、每回合毛落袋越高、占比越低）。`;
@@ -2615,7 +2629,7 @@ function pfCardHTML(pf, opts){
       ${k("回测期末资产(模拟)", simOk? "¥"+fmt(bt.totalAssets,0):"—",
           signClass(bt.totalProfit),
           "按计划投入 ¥"+fmt(bt.T,0)+" 全额部署"+(bt.unmodeledAlloc>0? "（含未回放 ¥"+fmt(bt.unmodeledAlloc,0)+" 现金）":"")+"，样本内重放")}
-      ${k("实绩利润", fmt(bt.actProfit,0), signClass(bt.actProfit))}
+      ${k("实绩利润", fmt(bt.actProfit,2), signClass(bt.actProfit))}
     </div>
     <div class="hint" style="font-size:11px;margin-top:8px"><b>真实</b>=已建仓成员市值+现金合计 · <b>回测</b>=按计划投入分配、样本内重放期末估值（非真实持仓）<span class="tip-anchor" data-tip="真实=各成员按真实成交的市值+现金合计（未建仓计0）；回测(模拟)=以计划投入为本金基准，按权重拆给各成员、各用自己条件单在样本行情从头重跑网格的期末估值——计划投入全额部署，未参与回放的成员（缺行情/未配置网格）按现金计入，不会出现腰斩；样本内某成员价格未触发成交时≈分得的计划投入。">口径说明</span></div>
   </div>`;
@@ -4730,6 +4744,7 @@ function renderPortfolioDetail(pf){
   const col=PF_COLORS;
   const memberRows=members.map((m,i)=>{
     const p=m.g.cond.params, sm=computeBacktest(m.g).summary;
+    const todayCnt=m.g.trades.filter(t=> t.date===todayISO()).length;   // 今日成交笔数
     const rw=bt? bt.rows.find(r=> (r.g && r.g.id===m.g.id) || r.gridId===m.g.id):null;
     const alloc=rw? rw.alloc : 0;
     const simProf=rw&&rw.sim? rw.sim.totalProfit : null;
@@ -4743,7 +4758,7 @@ function renderPortfolioDetail(pf){
     const pCls = simProf==null? "" : signClass(simProf);
     return '<div class="ovrow" style="cursor:pointer" onclick="openPfMember(\''+m.g.id+'\')">'
       + '<div class="sel"></div>'
-      + '<div class="sym">'+symNameHTML(m.g.meta.name,15)+tags+'<small>'+m.g.meta.code+' · '+m.g.trades.length+' 笔交易 · 现价 ¥'+fmt(sm.cur,3)+'</small></div>'
+      + '<div class="sym">'+symNameHTML(m.g.meta.name,15)+tags+'<small>'+m.g.meta.code+' · 今日 '+(todayCnt? '<b style="color:#B03021">'+todayCnt+' 笔</b>' : '0 笔')+' · 共 '+m.g.trades.length+' 笔 · 现价 ¥'+fmt(sm.cur,3)+'</small></div>'
       + '<div class="cond">权重 <b>'+pct(norm[i],1)+'</b> · 分配 <b>¥'+fmt(alloc,0)+'</b><br>'+condTxt+'</div>'
       + '<div class="profit '+pCls+'">'+(simProf==null? "—" : fmt(simProf,2))
       + '<div style="font-size:11px;color:var(--muted);font-weight:400">回测利润</div>'
@@ -4771,7 +4786,7 @@ function renderPortfolioDetail(pf){
       <div class="kpi"><div class="v">${bt? "¥"+fmt(bt.actAssets,0):"—"}</div><div class="l">实时总资产 · 真实</div><div class="s">已投 ¥${bt?fmt(bt.actInvest,0):"—"} · 同详情①口径</div></div>
       <div class="kpi"><div class="v ${bt? signClass(bt.actProfit):""}">${bt? fmt(bt.actProfit,2):"—"}</div><div class="l">实绩利润合计</div><div class="s">各成员已录成交</div></div>
       <div class="kpi"><div class="v ${bt? signClass(bt.actRet):""}">${bt? pct(bt.actRet,2):"—"}</div><div class="l">实绩收益率</div></div>
-      <div class="kpi"><div class="v ${signClass(bt?bt.actGrid:0)}">${bt? fmt(bt.actGrid,0):"—"}</div><div class="l">实绩落袋收益</div></div>
+      <div class="kpi"><div class="v ${signClass(bt?bt.actGrid:0)}">${bt? fmt(bt.actGrid,2):"—"}</div><div class="l">实绩落袋收益</div></div>
     </div>
     <div class="card"><div class="card-body">
       <div style="font-size:13px;line-height:1.8">${mvLine}</div>
@@ -5204,7 +5219,7 @@ function runProfitBest(id){
     <div style="font-weight:600;font-size:13px;margin-bottom:8px">收益优先结果（历史样本内，风险受控，口径与①对齐）</div>
     <div style="font-size:13px;line-height:1.9">
       参数：间距 <b>${pct(b.spacingPct,1)}</b> · 上/下 <b>${b.upGrids}/${b.downGrids}</b> 格 · 每笔 <b>${fmt(b.qtyPerTrade,0)}</b> 股<br>
-      回测网格收益：<b>${fmt(curV,0)}</b> → <b class="${signClass(diffR)}">${fmt(r.bestScore,0)}</b>（Δ <b class="${signClass(diffR)}">${fmt(diffR,0)}</b>）· 总收益率 ${pct(simBest.overall,2)}
+      回测网格收益：<b>${fmt(curV,2)}</b> → <b class="${signClass(diffR)}">${fmt(r.bestScore,2)}</b>（Δ <b class="${signClass(diffR)}">${fmt(diffR,2)}</b>）· 总收益率 ${pct(simBest.overall,2)}
     </div>
     <div class="cd-dim" style="margin-top:6px">${fTxtB} · 满仓需资金 ≈ ¥${fmt(needN,0)}（初始投入 ¥${fmt(initN,0)}${needN>initN&&initN>0? "，略超，可上调每笔外的余量或确认接受":""}）· 历史最优≠未来最优，趋势市中谨慎。</div>
     <div style="margin-top:8px"><button class="btn sm ghost" onclick="applySugToCond('${g.id}',{spacingPct:${b.spacingPct},upGrids:${b.upGrids},downGrids:${b.downGrids},qtyPerTrade:${b.qtyPerTrade}})">一键填入表单</button><span style="margin-left:8px;font-size:11px;color:var(--muted)">填入后请核对「持仓控制」上限并应用</span></div>
