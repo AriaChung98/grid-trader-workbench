@@ -2854,23 +2854,80 @@ function realizedRho(kA, kB){
   if(!(sxx>0&&syy>0)) return {rho:null, n};
   return {rho: Math.max(-1, Math.min(1, sxy/Math.sqrt(sxx*syy))), n};
 }
+/* ===== 相关系数先验：单因子模型（2026-09-15 替换"类别先验一律取 0.72"的旧做法）=====
+   旧做法把"宽基 × 任意行业"一律取 0.72、"宽基 × 任意个股"一律取 0.70 —— 于是医药、煤炭、
+   证券、半导体、银行在面板上显示同一个数，无法区分该补哪一类，这是错的。
+   现实里：ρ(沪深300, 医药)≈0.55、ρ(沪深300, 煤炭)≈0.38、ρ(沪深300, 证券)≈0.82。
+   改用单因子模型，把每个标的的收益拆成「市场因子 M（A股大盘）」+「残差 ε（行业/风格自身）」：
+       r_i = m_i·M + √(1−m_i²)·ε_i      （m_i = 与 A 股大盘的典型相关度，即"市场 beta 型"风险占比）
+       ρ(i,j) = m_i·m_j + √(1−m_i²)·√(1−m_j²)·c_ij     （c_ij = 残差相关，行业/风格重叠度）
+   自校验：m(半导体)=0.72、m(医药)=0.55 → ρ=0.72×0.55+√(1−0.5184)×√(1−0.3025)×0.25 ≈ 0.54（实际约 0.55 ✓）
+           m(黄金)=0.03 → ρ(黄金,沪深300)=0.03；m(标普500)=0.20 → ρ=0.20。 */
+const CAT_MRHO={ broad_large:1.00, broad_mid:0.93, broad_growth:0.85, dividend:0.78,
+  industry:0.65, stock:0.55, convertible:0.60, bond:0.05, gold:0.03, commodity:0.25,
+  overseas_us:0.22, overseas_hk:0.62 };
+const IND_MRHO={ "半导体":0.72,"人工智能":0.68,"游戏":0.62,"新能源":0.70,"证券":0.82,"军工":0.58,
+  "医药":0.55,"白酒":0.70,"煤炭":0.38,"地产":0.60,"农业":0.45,"银行":0.62,"电力":0.40,
+  "通信":0.50,"石化":0.45,"铁路":0.32,"水电":0.30,"有色":0.30,"消费":0.65,"科技":0.70 };
+/* 标的与 A 股大盘的典型相关度 m：候选池条目自带 m 优先，其次按行业，最后按类别 */
+function symMRho(g){
+  const code=(g && g.meta)? g.meta.code : "";
+  const it=POOL_BY_CODE[code];
+  if(it && it.m!=null) return it.m;
+  const cat=symCat(code, (g && g.meta)? g.meta.name : "");
+  const k=industryKey((g && g.meta)? g.meta.name : "", (g && g.meta)? g.meta.ind : "");
+  if(IND_MRHO[k]!=null) return (cat==="stock"? IND_MRHO[k]*0.90 : IND_MRHO[k]);  // 个股另有个体风险 → 略降
+  return (CAT_MRHO[cat]!=null? CAT_MRHO[cat] : 0.65);
+}
+/* 与 A 股大盘的典型相关度（供界面展示） */
+function marketRhoOf(g){ try{ return symMRho(g); }catch(e){ return null; } }
+const RESID_EQ=["broad_large","broad_mid","broad_growth"];
+/* 残差相关 c：剔除大盘后的行业 / 风格重叠度（大类之间低、同类之间高、同赛道最高） */
+function residCorr(cA,cB){
+  const x=(cA<cB? cA : cB), y=(cA<cB? cB : cA);
+  const has=function(v){ return x===v||y===v; };
+  const both=function(v){ return x===v&&y===v; };
+  const isEq=function(v){ return RESID_EQ.indexOf(v)>=0; };
+  if(has("gold")) return has("commodity")? 0.35 : 0.00;
+  if(has("bond")) return 0.05;
+  if(both("commodity")) return 0.50;
+  if(has("commodity")) return 0.10;
+  if(both("overseas_us")) return 0.75;
+  if(both("overseas_hk")) return 0.70;
+  if(has("overseas_us")&&has("overseas_hk")) return 0.45;
+  if(has("overseas_us")) return 0.10;
+  if(has("overseas_hk")) return 0.35;
+  if(both("convertible")) return 0.60;
+  if(has("convertible")) return 0.25;
+  if(both("dividend")) return 0.60;
+  if(has("dividend")) return 0.30;
+  if(isEq(x)&&isEq(y)) return 0.55;
+  if(isEq(x)||isEq(y)){ const o=(isEq(x)? y : x); return (o==="industry"||o==="stock")? 0.15 : 0.20; }
+  if((x==="industry"||x==="stock")&&(y==="industry"||y==="stock")) return (x==="stock"&&y==="stock")? 0.20 : 0.25;
+  return 0.20;
+}
 /* 两个标的的相关系数：优先实测，否则类型先验 */
 function pairRho(gA, gB){
+  if(gA && gB && gA.meta && gB.meta && gA.meta.code===gB.meta.code) return {rho:1, src:"同一标的", n:0, note:""};
   const rr=realizedRho(gA&&gA.market&&gA.market.kline, gB&&gB.market&&gB.market.kline);
   if(rr && rr.rho!=null) return {rho:rr.rho, src:"实测", n:rr.n, note:""};
   const cA=symCat(gA.meta.code, gA.meta.name), cB=symCat(gB.meta.code, gB.meta.name);
-  let r=CAT_RHO[cA][cB], note="类型先验";
-  if(cA==="industry" && cB==="industry"){
-    const kA=industryKey(gA.meta.name, gA.meta.ind), kB=industryKey(gB.meta.name, gB.meta.ind);
-    if(kA&&kB&&kA===kB){ r=0.90; note="同行业"; }
-    else if(kA&&kB){ r=0.55; note="不同行业"; }
-    else { r=0.60; note="行业间"; }
-  } else if(cA==="stock" && cB==="industry" || cA==="industry" && cB==="stock"){
-    const sG=(cA==="stock"? gA : gB), eG=(cA==="industry"? gA : gB);
-    const kS=industryKey(sG.meta.name, sG.meta.ind), kE=industryKey(eG.meta.name, eG.meta.ind);
-    if(kS&&kE&&kS===kE){ r=0.88; note="个股·同行业"; }
+  const kA=industryKey(gA.meta.name, gA.meta.ind), kB=industryKey(gB.meta.name, gB.meta.ind);
+  /* ① 同一条赛道：残差几乎完全重合，不可分散（同一行业 ETF≈0.92；含个股≈0.88；两只个股≈0.85） */
+  if(kA && kB && kA===kB){
+    const nS=((cA==="stock")?1:0)+((cB==="stock")?1:0);
+    const r=(nS===2? 0.85 : (nS===1? 0.88 : 0.92));
+    return {rho:r, src:"先验", n:(rr? rr.n:0), note:"同行业 · "+kA+(nS? "（含个股）":"")};
   }
-  return {rho:r, src:"先验", n:(rr? rr.n : 0), note:note};
+  /* ② 单因子模型：m_i·m_j + √(1−m_i²)·√(1−m_j²)·c_ij */
+  const mi=symMRho(gA), mj=symMRho(gB);
+  const ci=Math.sqrt(Math.max(0, 1-mi*mi)), cj=Math.sqrt(Math.max(0, 1-mj*mj));
+  let r=mi*mj + ci*cj*residCorr(cA,cB);
+  r=Math.max(-1, Math.min(1, r));
+  const note = (kA && kB)? (kA+" × "+kB+"（跨行业）")
+             : (kA || kB)? ((kA||kB)+"行业")
+             : (SYM_CAT[cA].n+" × "+SYM_CAT[cB].n);
+  return {rho:r, src:"先验", n:(rr? rr.n:0), note:note};
 }
 /* ===== 网格可收割性：网格赚的是波动的钱 =====
    蒙特卡洛实测标定（按评价规则设参数、含最低手续费）：毛网格收益率 ≈ 0.27 × 年化波动率
@@ -2915,51 +2972,54 @@ function pfRisk(members){
 /* 可加入的分散化候选池（真实 ETF 代码；加入前会按你的实际持仓算 ρ） */
 const DIVERSIFY_POOL=[
   /* 每项 vol = 该类/该标的的年化波动先验（优先级高于 SYM_CAT 的类均值）；ind = 行业标签，用于判断"同行业" */
-  {code:"sh518880", name:"黄金ETF", cat:"gold", vol:0.17},
-  {code:"sh513500", name:"标普500ETF", cat:"overseas_us", vol:0.21},
-  {code:"sh513100", name:"纳指ETF", cat:"overseas_us", vol:0.26},
-  {code:"sz159941", name:"纳指ETF广发", cat:"overseas_us", vol:0.26},
-  {code:"sh513050", name:"中概互联ETF", cat:"overseas_hk", vol:0.34},
-  {code:"sh513180", name:"恒生科技ETF", cat:"overseas_hk", vol:0.36},
-  {code:"sz159980", name:"有色ETF", cat:"commodity", vol:0.26},
-  {code:"sz159985", name:"豆粕ETF", cat:"commodity", vol:0.25},
-  {code:"sh511380", name:"可转债ETF", cat:"convertible", vol:0.18},
-  {code:"sh515450", name:"红利低波50ETF", cat:"dividend", vol:0.18},
-  {code:"sh512890", name:"红利低波ETF", cat:"dividend", vol:0.18},
-  {code:"sh510880", name:"红利ETF", cat:"dividend", vol:0.19},
-  {code:"sh510050", name:"上证50ETF", cat:"broad_large", vol:0.21},
-  {code:"sh510500", name:"中证500ETF", cat:"broad_mid", vol:0.27},
-  {code:"sh512100", name:"中证1000ETF", cat:"broad_mid", vol:0.31},
-  {code:"sz159915", name:"创业板ETF", cat:"broad_growth", vol:0.42},
-  {code:"sh588000", name:"科创50ETF", cat:"broad_growth", vol:0.48},
+  {code:"sh518880", name:"黄金ETF", cat:"gold", vol:0.17, m:0.03},
+  {code:"sh513500", name:"标普500ETF", cat:"overseas_us", vol:0.21, m:0.2},
+  {code:"sh513100", name:"纳指ETF", cat:"overseas_us", vol:0.26, m:0.24},
+  {code:"sz159941", name:"纳指ETF广发", cat:"overseas_us", vol:0.26, m:0.24},
+  {code:"sh513050", name:"中概互联ETF", cat:"overseas_hk", vol:0.34, m:0.6},
+  {code:"sh513180", name:"恒生科技ETF", cat:"overseas_hk", vol:0.36, m:0.62},
+  {code:"sz159980", name:"有色ETF", cat:"commodity", vol:0.26, m:0.3},
+  {code:"sz159985", name:"豆粕ETF", cat:"commodity", vol:0.25, m:0.08},
+  {code:"sh511380", name:"可转债ETF", cat:"convertible", vol:0.18, m:0.6},
+  {code:"sh515450", name:"红利低波50ETF", cat:"dividend", vol:0.18, m:0.76},
+  {code:"sh512890", name:"红利低波ETF", cat:"dividend", vol:0.18, m:0.76},
+  {code:"sh510880", name:"红利ETF", cat:"dividend", vol:0.19, m:0.8},
+  {code:"sh510050", name:"上证50ETF", cat:"broad_large", vol:0.21, m:0.98},
+  {code:"sh510500", name:"中证500ETF", cat:"broad_mid", vol:0.27, m:0.93},
+  {code:"sh512100", name:"中证1000ETF", cat:"broad_mid", vol:0.31, m:0.9},
+  {code:"sz159915", name:"创业板ETF", cat:"broad_growth", vol:0.42, m:0.85},
+  {code:"sh588000", name:"科创50ETF", cat:"broad_growth", vol:0.48, m:0.86},
   /* —— 行业 / 主题：波动大、且不同行业之间相关度明显低于同风格宽基（约 0.55 vs 0.85），
         是"既要波动、又要互补"时最实用的一类。同行业之间仍高达 0.90，不可叠加。 —— */
-  {code:"sh512480", name:"半导体ETF", cat:"industry", ind:"半导体", vol:0.46},
-  {code:"sz159995", name:"芯片ETF", cat:"industry", ind:"半导体", vol:0.46},
-  {code:"sz159819", name:"人工智能ETF", cat:"industry", ind:"人工智能", vol:0.45},
-  {code:"sh516010", name:"游戏ETF", cat:"industry", ind:"游戏", vol:0.42},
-  {code:"sh515790", name:"光伏ETF", cat:"industry", ind:"新能源", vol:0.42},
-  {code:"sh515030", name:"新能源车ETF", cat:"industry", ind:"新能源", vol:0.40},
-  {code:"sh512880", name:"证券ETF", cat:"industry", ind:"证券", vol:0.40},
-  {code:"sh512660", name:"军工ETF", cat:"industry", ind:"军工", vol:0.40},
-  {code:"sh512010", name:"医药ETF", cat:"industry", ind:"医药", vol:0.32},
-  {code:"sh512170", name:"医疗ETF", cat:"industry", ind:"医药", vol:0.34},
-  {code:"sh512690", name:"酒ETF", cat:"industry", ind:"白酒", vol:0.30},
-  {code:"sh515220", name:"煤炭ETF", cat:"industry", ind:"煤炭", vol:0.30},
-  {code:"sh512200", name:"房地产ETF", cat:"industry", ind:"地产", vol:0.32},
-  {code:"sz159825", name:"农业ETF", cat:"industry", ind:"农业", vol:0.28},
-  {code:"sh512800", name:"银行ETF", cat:"industry", ind:"银行", vol:0.22},
-  {code:"sh159611", name:"电力ETF", cat:"industry", ind:"电力", vol:0.21},
+  {code:"sh512480", name:"半导体ETF", cat:"industry", ind:"半导体", vol:0.46, m:0.72},
+  {code:"sz159995", name:"芯片ETF", cat:"industry", ind:"半导体", vol:0.46, m:0.72},
+  {code:"sz159819", name:"人工智能ETF", cat:"industry", ind:"人工智能", vol:0.45, m:0.68},
+  {code:"sh516010", name:"游戏ETF", cat:"industry", ind:"游戏", vol:0.42, m:0.62},
+  {code:"sh515790", name:"光伏ETF", cat:"industry", ind:"新能源", vol:0.42, m:0.7},
+  {code:"sh515030", name:"新能源车ETF", cat:"industry", ind:"新能源", vol:0.40, m:0.72},
+  {code:"sh512880", name:"证券ETF", cat:"industry", ind:"证券", vol:0.40, m:0.82},
+  {code:"sh512660", name:"军工ETF", cat:"industry", ind:"军工", vol:0.40, m:0.58},
+  {code:"sh512010", name:"医药ETF", cat:"industry", ind:"医药", vol:0.32, m:0.55},
+  {code:"sh512170", name:"医疗ETF", cat:"industry", ind:"医药", vol:0.34, m:0.55},
+  {code:"sh512690", name:"酒ETF", cat:"industry", ind:"白酒", vol:0.30, m:0.7},
+  {code:"sh515220", name:"煤炭ETF", cat:"industry", ind:"煤炭", vol:0.30, m:0.38},
+  {code:"sh512200", name:"房地产ETF", cat:"industry", ind:"地产", vol:0.32, m:0.6},
+  {code:"sz159825", name:"农业ETF", cat:"industry", ind:"农业", vol:0.28, m:0.45},
+  {code:"sh512800", name:"银行ETF", cat:"industry", ind:"银行", vol:0.22, m:0.62},
+  {code:"sh159611", name:"电力ETF", cat:"industry", ind:"电力", vol:0.21, m:0.4},
   /* —— 个股：不是分散工具，仅作范围参考（vol 为个股自身量级，仍建议实测复核） —— */
-  {code:"sh600900", name:"长江电力", cat:"stock", ind:"电力", vol:0.17},
-  {code:"sh601398", name:"工商银行", cat:"stock", ind:"银行", vol:0.20},
-  {code:"sh601939", name:"建设银行", cat:"stock", ind:"银行", vol:0.20},
-  {code:"sh600941", name:"中国移动", cat:"stock", ind:"通信", vol:0.22},
-  {code:"sh601006", name:"大秦铁路", cat:"stock", ind:"铁路", vol:0.19},
-  {code:"sh600028", name:"中国石化", cat:"stock", ind:"石化", vol:0.22},
-  {code:"sh601088", name:"中国神华", cat:"stock", ind:"煤炭", vol:0.28},
-  {code:"sh600519", name:"贵州茅台", cat:"stock", ind:"白酒", vol:0.28}
+  {code:"sh600900", name:"长江电力", cat:"stock", ind:"电力", vol:0.17, m:0.36},
+  {code:"sh601398", name:"工商银行", cat:"stock", ind:"银行", vol:0.20, m:0.56},
+  {code:"sh601939", name:"建设银行", cat:"stock", ind:"银行", vol:0.20, m:0.56},
+  {code:"sh600941", name:"中国移动", cat:"stock", ind:"通信", vol:0.22, m:0.45},
+  {code:"sh601006", name:"大秦铁路", cat:"stock", ind:"铁路", vol:0.19, m:0.29},
+  {code:"sh600028", name:"中国石化", cat:"stock", ind:"石化", vol:0.22, m:0.41},
+  {code:"sh601088", name:"中国神华", cat:"stock", ind:"煤炭", vol:0.28, m:0.34},
+  {code:"sh600519", name:"贵州茅台", cat:"stock", ind:"白酒", vol:0.28, m:0.63}
 ];
+/* 候选池索引：按代码取条目（用于 vol / m 等先验） */
+const POOL_BY_CODE={};
+DIVERSIFY_POOL.forEach(function(x){ POOL_BY_CODE[x.code]=x; });
 /* 取候选的年化波动先验：条目自带 vol 优先，否则用类别均值 */
 function poolVol(c){ return (c && c.vol>0)? c.vol : SYM_CAT[c.cat].annVol; }
 /* 「可加入的范围」分组展示顺序：从最能分散到最不能 */
@@ -2987,15 +3047,18 @@ function pfPoolRangeHTML(members){
       .sort(function(x,y){ return poolVol(y)-poolVol(x); });
     const chips=items.map(function(c){
       const sig=poolVol(c);
-      let rhoTxt="";
+      const cm=(PF_CAND_BT[c.code] && PF_CAND_BT[c.code]._m) || null;   // 已回测过 → 用实测行情算脚
+      let rhoTxt="", tip="点击加入组合";
       if(ms.length){
-        const fake={meta:{code:c.code, name:c.name, ind:c.ind}, market:null};
-        const arr=ms.map(function(x){ return pairRho(fake, x.g).rho; });
-        const rb=ms.reduce(function(a,x,i){ return a+x.w*arr[i]; }, 0);
+        const fake={meta:{code:c.code, name:c.name, ind:c.ind}, market:cm};
+        const arr=ms.map(function(x){ return pairRho(fake, x.g); });
+        const rb=ms.reduce(function(a,x,i){ return a+x.w*arr[i].rho; }, 0);
         const cls=(rb<=0.3? "g" : (rb>=0.75? "r" : "y"));
         rhoTxt='<span class="v '+cls+'">ρ'+rb.toFixed(2)+'</span>';
+        tip=arr.map(function(r){ return r.src+(r.note? "（"+r.note+"）":"")+(r.n? " n="+r.n:""); }).join(" / ");
       }
-      return '<span class="pf-chip" title="点击加入组合" onclick="pfQuickAdd(\''+c.code+'\')">'
+      const st=marketRhoOf({meta:{code:c.code, name:c.name, ind:c.ind}});
+      return '<span class="pf-chip" title="'+esc((st!=null? "与A股大盘相关 m="+st.toFixed(2)+" · " : "")+tip)+'" onclick="pfQuickAdd(\''+c.code+'\')">'
         + (c.ind? '<span class="i">'+c.ind+'</span>':'')
         + '<span class="n">'+esc(c.name)+'</span>'
         + '<span class="c">'+c.code+'</span>'
@@ -3012,9 +3075,9 @@ function pfPoolRangeHTML(members){
   });
   return rows + '<div class="hint" style="font-size:11px;margin-top:8px;line-height:1.7">'
     + '① <b>已排除波动不足的品种</b>：'+exc.join("、")+'。网格赚的是波动的钱——年化波动低于 '+(GRID_MIN_VOL*100).toFixed(0)+'% 时，最低 5 元手续费会吃掉 25% 以上的毛收益，波动越小越亏。'
-    + '<br>② <b>不同行业之间才是最实用的互补</b>：同风格宽基彼此 ρ≈0.85，而不同行业之间只有 ≈0.55——同为高波动，却能把风险错开。<b>但同一条赛道不可叠加</b>（半导体与芯片、光伏与新能源车均视为同一行业，ρ≈0.90）。'
-    + '<br>③ <b>个股不是分散工具</b>（自身波动高、有退市风险，与宽基相关 0.5~0.8），如使用请控制仓位。'
-    + '<br>④ σ 与 ρ 为<b>类型先验</b>（个股取 35~40% 的类均值，个别差异极大——如长江电力约 15%、多数个股 35%+），点「拉取候选行情并回测」会用实测值复核。</div>';
+    + '<br>② ρ 按<b>具体行业</b>估算，不再笼统取一个数：ρ(沪深300, 证券)=0.82、半导体=0.72、医药=0.55、电力=0.40、煤炭=0.38、黄金=0.03。<b>不同行业是最实用的互补</b>（半导体↔医药 ρ≈0.54），<b>但同一条赛道不可叠加</b>（半导体↔芯片、光伏↔新能源车 ρ≈0.92）。'
+    + '<br>③ <b>个股不是分散工具</b>（自身波动高、有退市风险），如使用请控制仓位。'
+    + '<br>④ σ 与 ρ 为<b>先验</b>估算（鼠标悬停标签可看依据），点「拉取候选行情并回测」会用实测行情复核。</div>';
 }
 /* 候选建议：算每个候选取 t 权重加入后的 σ_p 降幅，按降幅排序 */
 function pfSuggestList(members, t){
@@ -3030,8 +3093,12 @@ function pfSuggestList(members, t){
     if(!(Vc>=GRID_MIN_VOL)) return;
     /* 已经持有的标的不再推荐（避免"给自己的组合再加一遍"） */
     if(norm.some(function(x){ return x.g.meta.code===c.code; })) return;
-    const fake={meta:{code:c.code, name:c.name, ind:c.ind}, market:null};
-    const rhoArr=norm.map(function(x){ return pairRho(fake, x.g).rho; });
+    const cm=(PF_CAND_BT[c.code] && PF_CAND_BT[c.code]._m) || null;
+    const fake={meta:{code:c.code, name:c.name, ind:c.ind}, market:cm};
+    const rhoPr=norm.map(function(x){ return pairRho(fake, x.g); });
+    const rhoArr=rhoPr.map(function(r){ return r.rho; });
+    const rhoNote=rhoPr.map(function(r){ return r.note; }).filter(Boolean)[0] || "";
+    const rhoSrc=(cm? "实测" : (rhoPr.some(function(r){ return r.src==="实测"; })? "实测" : "先验"));
     const rhoBar=norm.reduce(function(a,x,i){ return a+x.w*rhoArr[i]; }, 0);
     const all=keepW.concat([t]);
     const V=risk.V.concat([Vc]);
@@ -3048,7 +3115,7 @@ function pfSuggestList(members, t){
     const wavg1=all.reduce(function(a,w,i){ return a+w*V[i]; }, 0);
     const gy1=all.reduce(function(a,w,i){ return a+w*estGridYield(V[i]); }, 0);
     list.push({code:c.code, name:c.name, cat:c.cat, catName:SYM_CAT[c.cat].n, ind:c.ind||"",
-      rhoBar:rhoBar, vol:Vc, sigmaP:sp1, wavg:wavg1,
+      rhoBar:rhoBar, rhoNote:rhoNote, rhoSrc:rhoSrc, vol:Vc, sigmaP:sp1, wavg:wavg1,
       drop:(risk.sigmaP>0? (risk.sigmaP-sp1)/risk.sigmaP : 0),
       gridYield:gy1, eff:(sp1>0? gy1/sp1 : 0)});
   });
@@ -3072,9 +3139,10 @@ function pfSuggestList(members, t){
   /* 只留"加入后风险效率确实更高"的候选；若一个都没有（极端情形）则退回完整排序表 */
   const better=list.filter(function(x){ return x.eff>risk.eff+1e-9; });
   const pool=(better.length? better : list);
-  /* 同类别只保留 1 个，避免清单被同类标的占满 */
+  /* 去重：同一类别只留 1 个；行业类按下钻到"具体行业"，让两个不同行业能同时出现（那才是互补） */
+  const dkey=function(x){ return (x.cat==="industry")? ("ind:"+(industryKey(x.name, x.ind)||x.code)) : x.cat; };
   const cnt={}, uniq=[];
-  pool.forEach(function(x){ cnt[x.cat]=(cnt[x.cat]||0)+1; if(cnt[x.cat]<=1) uniq.push(x); });
+  pool.forEach(function(x){ const k2=dkey(x); cnt[k2]=(cnt[k2]||0)+1; if(cnt[k2]<=1) uniq.push(x); });
   return {risk:risk, list:uniq, t:t, holds:norm, allBetter:(better.length===pool.length)};
 }
 /* 候选标的的"基本回测依据"：拉行情 → 年化波动 / 最大回撤 / 与组合实测ρ / 网格模拟 */
@@ -3183,15 +3251,20 @@ function pfDiversifyHTML(d, bare){
         + '</div>'
       : '');
   let sugHTML="";
-  if(members.length>=2){
+  if(members.length>=1){
     const sug=pfSuggestList(members, 0.25);
+    /* 只有 1 个成员时也给出推荐——这正是"选完第一只、该补第二只"的时刻 */
+    const lead=(members.length===1)
+      ? '<div style="font-size:12.5px;line-height:1.8;margin-bottom:8px">当前只有 <b>'+SYM_CAT[symCat(members[0].g.meta.code, members[0].g.meta.name)].n+'</b> 一个成员，谈不上分散。下表是<b>加入第二只</b>的推荐；其中「与组合 ρ̄」就是该候选与 <b>'+esc(members[0].g.meta.name)+'</b> 的相关度 —— 越低越能错开风险，ρ 高（如同风格宽基 0.9+）加了等于没加。</div>'
+      : "";
     const rows=sug.list.slice(0,6).map(function(x){
       const better=(risk && x.eff>risk.eff);
       return '<tr>'
         + '<td style="padding:6px 8px"><div style="font-weight:500">'+esc(x.name)+'</div><div style="font-size:11px;color:var(--muted)">'+x.code+'</div></td>'
         + '<td style="padding:6px 8px;color:var(--muted)">'+x.catName+'</td>'
         + '<td style="padding:6px 8px">'+pct(x.vol,1)+'</td>'
-        + '<td style="padding:6px 8px">'+x.rhoBar.toFixed(2)+'</td>'
+        + '<td style="padding:6px 8px" title="'+esc((x.rhoSrc||"先验")+(x.rhoNote? " · "+x.rhoNote:""))+'">'+x.rhoBar.toFixed(2)+'</td>'
+
         + '<td style="padding:6px 8px">'+pct(x.sigmaP,1)+'</td>'
         + '<td style="padding:6px 8px">'+pct(x.gridYield,2)+'</td>'
         + '<td style="padding:6px 8px;font-weight:600;color:'+(better? "#2E7D5B":"#8A6A2F")+'">'+x.eff.toFixed(2)+'</td>'
@@ -3209,7 +3282,8 @@ function pfDiversifyHTML(d, bare){
         : ord==="high"? '进取：在 ρ̄ ≤ 0.85 的候选里按<b>绝对网格收益</b>排序 —— 波动最大、收益最高，同时允许较高相关，回撤也最大。'
         : '均衡：在<b>真能分散</b>（与组合平均 ρ̄ ≤ 0.75）的候选里按<b>绝对网格收益</b>排序 —— 兼顾波动收益与分散，是默认口径。')
       + '</div>';
-    sugHTML=SEC("建议加入","假定占 25% 权重 · 已排除你已持有的标的")
+    sugHTML=SEC("建议加入", (members.length===1? "先补第二只成员 · " : "")+"假定占 25% 权重 · 已排除你已持有的标的")
+      + lead
       + ordBar
       + '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:720px">'
       + '<thead><tr style="color:var(--muted);text-align:left">'
@@ -3221,11 +3295,6 @@ function pfDiversifyHTML(d, bare){
       + '<button class="btn sm" onclick="pfRunCandBt()">'+(PF_CAND_LOADING? "拉取中…":"拉取候选行情并回测")+'</button>'
       + '<span class="hint" style="font-size:11.5px">用候选历史日K按评价规则跑一遍网格，给出实测波动 / 最大回撤 / 与成员的实测 ρ。</span></div>'
       + pfCandBtHTML();
-  } else {
-    const single=members[0];
-    sugHTML=SEC("建议加入","先再加 1 个成员才能排序")
-      + '<div style="font-size:12.5px;line-height:1.8">当前只有 <b>'+SYM_CAT[symCat(single.g.meta.code, single.g.meta.name)].n
-      + '</b> 一个成员，谈不上分散。先补一类低相关的大类（黄金 / 海外 / 商品），再考虑换风格。</div>';
   }
   return PFD(
     SEC("组合构成", members.length+" 个成员 · 权重已归一化") + '<div>'+chips+'</div>'
