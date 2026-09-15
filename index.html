@@ -1667,32 +1667,94 @@ function recalcDerived(d, kline){
 }
 
 
-/* 改“每笔数量”时，按计划投入(初始资金)反算可承载的上下格并回填 */
-function autoGridsFromQty(d){
+/* 市场参考价（覆盖目标）：52周低 / 60日低 / 52周高。优先取行情对象，缺失时由日K序列推算 */
+function condMarketRef(d, kline, market){
+  const base=d.basePrice>0? d.basePrice:0;
+  let low52=null, low60=null, high52=null;
+  if(market){
+    if(market.low52>0) low52=market.low52;
+    if(market.low60>0) low60=market.low60;
+    if(market.high52>0) high52=market.high52;
+  }
+  const arr=(kline||[]).filter(x=> x && x.close>0);
+  if(arr.length){
+    const tail=(n)=>arr.slice(Math.max(0, arr.length-n));
+    const lo=(a)=>Math.min.apply(null, a.map(x=> (x.low!=null&&x.low>0)? x.low : x.close));
+    const hi=(a)=>Math.max.apply(null, a.map(x=> (x.high!=null&&x.high>0)? x.high : x.close));
+    if(low52==null) low52=lo(tail(252));
+    if(low60==null) low60=lo(tail(60));
+    if(high52==null) high52=hi(tail(252));
+  }
+  return {base, low52, low60, high52};
+}
+/* 条件单派生（方案②：市场定格数 + 资金定每笔）
+   ① 格数 = 覆盖到"市场低点(52周低/60日低 取更深)"所需格数 = ln(目标低点÷基准价) ÷ ln(1−间距)
+      → 间距↑ ⇒ 格数↓（每格价格跨度更大、格子更少、每格更重）
+   ② 每笔股数 = 可加仓资金(资金−底仓成本) ÷ 各下行格价格之和，整手向下取整 → 资金正好用满
+   手动覆盖优先：_autoGrids=false 时不动格数；_autoQty=false 时不动每笔数量。 */
+function autoGridsFromQty(d, kline, market){
   const C=d.initCapital>0? d.initCapital:0;
   const base=d.basePrice>0? d.basePrice:0;
   const sp=d.spacingPct>0? d.spacingPct:0;
-  const q=Math.round(d.qtyPerTrade||0);
-  if(!(C>0 && base>0 && sp>0 && q>0)) return false;
-  let bq=d.targetBaseCost>0? Math.round(d.targetBaseCost) : Math.ceil(C/2/base/100)*100;
-  let need=base*bq, dn=0;
-  if(need<=C){
-    while(dn<40){
-      const nxt=need + base*Math.pow(1-sp,dn+1)*q;
-      if(nxt<=C){ dn++; need=nxt; } else break;
-    }
-  }
-  if(dn<1 && base*bq<C) dn=1;
-  d.upGrids=dn; d.downGrids=dn; d._autoGrids=true;
+  if(!(C>0 && base>0 && sp>0)) return false;
+  const ref=condMarketRef(d, kline, market);
+  const lows=[ref.low52, ref.low60].filter(v=> v>0 && v<base);
+  const targetLow = lows.length? Math.min.apply(null, lows) : round(base*0.9,3);   // 无有效低点 → 退化为覆盖 −10%
+  let Nm=Math.ceil(Math.log(targetLow/base)/Math.log(1-sp) - 1e-9);
+  if(!(Nm>0)) Nm=1; if(Nm>40) Nm=40;
+  const autoN = (d._autoGrids!==false);
+  let N = autoN? Nm : Math.max(1, Math.round(d.downGrids||Nm));
+  const bq = d.targetBaseCost>0? Math.round(d.targetBaseCost) : Math.ceil(C/2/base/100)*100;
+  const sumPx=(n)=>{ let s=0; for(let k=1;k<=n;k++) s+=base*Math.pow(1-sp,k); return s; };
+  const qOf=(n)=>{ const s=sumPx(n); return (s>0 && C>base*bq)? Math.floor(((C-base*bq)/s)/100)*100 : 0; };
+  let q=qOf(N);
+  while(autoN && N>1 && q<100){ N--; q=qOf(N); }     // 资金不足 → 逐格缩减，至少保证每格 1 手
+  if(autoN){ d.upGrids=N; d.downGrids=N; d._autoGrids=true; }
+  d._mktLow=round(targetLow,3); d._mktLow52=ref.low52; d._mktLow60=ref.low60;
+  if(d._autoQty!==false && q>=100){ d.qtyPerTrade=q; d._autoQty=true; }
   return true;
 }
 function syncGridInputs(d){
-  ["upGrids","downGrids"].forEach(k=>{
+  ["upGrids","downGrids","qtyPerTrade"].forEach(k=>{
     const el=document.querySelector(`input[data-k="${k}"]`);
     if(el && document.activeElement!==el) el.value=(d[k]!=null? d[k] : "");
   });
 }
-function onQtyChanged(d){ if(d && autoGridsFromQty(d)) syncGridInputs(d); }
+function onQtyChanged(d, kline, market){ if(d && autoGridsFromQty(d, kline, market)) syncGridInputs(d); }
+/* 条件单"覆盖诊断"：市场低点各需几格、当前格数覆盖到哪、资金占用/闲置/缺口 */
+function condCoverHTML(d, kline, market, ownerId){
+  if(!(d && d.basePrice>0 && d.spacingPct>0)) return "";
+  const ref=condMarketRef(d, kline, market), base=d.basePrice, sp=d.spacingPct;
+  const needN=(t)=> (t>0 && t<base)? Math.max(1, Math.ceil(Math.log(t/base)/Math.log(1-sp)-1e-9)) : null;
+  const dn=d.downGrids||0, up=d.upGrids||0;
+  const lower=base*Math.pow(1-sp,dn), upper=base*Math.pow(1+sp,up);
+  const C=d.initCapital>0? d.initCapital:0;
+  const bq=d.targetBaseCost>0? Math.round(d.targetBaseCost) : (C>0? Math.ceil(C/2/base/100)*100 : 0);
+  let sumPx=0; for(let k=1;k<=dn;k++) sumPx+=base*Math.pow(1-sp,k);
+  const cost=base*bq + (d.qtyPerTrade||0)*sumPx;
+  const seg=[];
+  const n60=needN(ref.low60), n52=needN(ref.low52);
+  if(n60!=null || n52!=null){
+    seg.push(`市场低点：60日 ¥${fmt(ref.low60,3)} 需 <b>${n60||"—"}</b> 格 · 52周 ¥${fmt(ref.low52,3)} 需 <b>${n52||"—"}</b> 格`);
+  }
+  seg.push(`当前 上<b>${up}</b>/下<b>${dn}</b> 格 ⟹ 下轨 ¥${fmt(lower,3)}（${pct(lower/base-1,1)}）· 上轨 ¥${fmt(upper,3)}（${pct(upper/base-1,1)}）`);
+  if(C>0 && d.qtyPerTrade>0){
+    const idle=C-cost;
+    seg.push(`占用 ¥${fmt(cost,0)} / 资金 ¥${fmt(C,0)}` + (idle>=0? `，余 ¥${fmt(idle,0)}` : `，<b style="color:#B03021">超 ¥${fmt(-idle,0)}</b>`));
+  }
+  const autoQ = d._autoQty!==false;
+  const toggle = ownerId? ` <button class="btn ghost mini" onclick="toggleQtyAuto('${ownerId}')">${autoQ?"改手动":"恢复自动"}</button>` : "";
+  return `<div class="hint" style="margin-top:6px">网格依据：${seg.join("；")}。<span class="tag ${autoQ?"ok":"info"}">每笔${autoQ?"自动":"手动"}</span>${toggle}</div>`;
+}
+/* 切换"每笔数量"自动/手动（仅详情页草稿） */
+function toggleQtyAuto(id){
+  const g=getGrid(id), d=g&&g._draft; if(!d) return;
+  d._autoQty = (d._autoQty===false)? true : false;
+  if(d._autoQty) autoGridsFromQty(d, (g.market? g.market.kline : g.pricePath), g.market);
+  syncGridInputs(d);
+  $("view").innerHTML=renderDetail(g); bindDetail(g);
+  toast(d._autoQty? "每笔数量：已恢复自动（按资金反推）" : "每笔数量：已改为手动（不再自动改写）");
+}
 
 /* 条件单字段输入：百分比以 % 显示；只读字段以文本呈现 */
 function fieldInputHTML(f, v, oninput){
@@ -4209,6 +4271,7 @@ function renderEditCond(g){
     ${baseBuiltChkHTML(g)}
     ${capFieldsHTML(d, `onDraftInput('${g.id}',event)`)}
     <div class="hint">上限 ¥${fmt(gl.upper,3)} · 下限 ¥${fmt(gl.lower,3)}。红/绿虚线为买卖触发线。期初价格与建议底仓随启动日自动算，可手动覆盖；修改后作为新版本保留历史。</div>
+    ${condCoverHTML(d, (g.market? g.market.kline : g.pricePath), g.market, g.id)}
     ${diagBlock}
     <div class="compare" id="editCompare"></div>
     <div class="acts-row" style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
@@ -4306,6 +4369,7 @@ function renderNewGrid(){
   }).join("");
   const gl = gridLevels(d);
   const recInfo = cr.recommend ? `<div class="hint">推荐：基准 ¥${fmt(cr.recommend.basePrice,3)} · 间距 ${pct(cr.recommend.spacingPct,2)} · 上 ${cr.recommend.upGrids}/下 ${cr.recommend.downGrids} 格（已填入，可改）。</div>` : "";
+  const coverInfo = condCoverHTML(d, (m? m.kline : null), m, "");
   return `<section class="section">
     <div class="lab"><span class="t">新增网格交易 · 第 2 步</span><span>${name}（${code}）</span></div>
     <div class="steps"><span>① 输入代码</span><span class="sep">→</span><b>② 行情与推荐</b><span class="sep">→</span>③ 确认锁定</div>
@@ -4318,6 +4382,7 @@ function renderNewGrid(){
       <h3>条件单参数设置（确认后锁定）</h3>
       ${recInfo}
       <div class="pline">${fields}</div>
+      ${coverInfo}
       ${capFieldsHTML(d, `onDraftInputNew(event)`)}
       <div id="cdNew" class="cd-wrap">${condDiagHTML(d, closesForNew(cr), "new", (m && m.kline && m.kline.length>1)? m.kline : null)}</div>
       <div class="hint">上限 ¥${fmt(gl.upper,3)} · 下限 ¥${fmt(gl.lower,3)} · 每格价差 ¥${fmt(d.basePrice*d.spacingPct,3)}。确认后条件单锁定，可在「修改条件单」调整并保留历史。</div>
@@ -4998,10 +5063,11 @@ function onDraftInput(id,e){
   else if(k==="targetBaseCost"){ g._draft._autoBase=false; v=parseFloat(v); if(!isNaN(v)) g._draft[k]=v; }
   else if(k==="posMinQty"||k==="posMaxQty"){ g._draft[k==="posMinQty"?"_autoPosMin":"_autoPosMax"]=false; v=parseFloat(v); if(!isNaN(v)) g._draft[k]=Math.max(0, Math.round(v)); }
   else if(k==="upGrids"||k==="downGrids"){ g._draft._autoGrids=false; v=parseFloat(v); if(!isNaN(v)) g._draft[k]=Math.max(0, Math.round(v)); }
+  else if(k==="qtyPerTrade"){ g._draft._autoQty=false; v=parseFloat(v); if(!isNaN(v)) g._draft[k]=Math.max(0, Math.round(v)); }
   else if(COND_FIELDS.find(f=>f.k===k && f.p)){ v=parseFloat(v)/100; if(!isNaN(v)) g._draft[k]=v; }
   else { v=parseFloat(v); if(!isNaN(v)) g._draft[k]=v; }
-  /* 间距变化（初始资金已确认且参数齐全时）重算上下网格，随后 recalcDerived 自动重算持仓上下限 */
-  if(k==="qtyPerTrade" || k==="spacingPct" || (k==="initCapital" && g._draft._autoGrids)) onQtyChanged(g._draft);
+  /* 方案②：间距/基准价/资金/底仓 变化 → 格数按市场低点重定、每笔数量按资金反推；手动改每笔数量则标记为手动 */
+  if(k==="spacingPct" || k==="basePrice" || k==="initCapital" || k==="targetBaseCost") onQtyChanged(g._draft, (g.market? g.market.kline : g.pricePath), g.market);
   recalcDerived(g._draft, (g.market? g.market.kline : g.pricePath));
   syncAutoFields(g._draft);
   syncPosInputs(g._draft);
@@ -5016,10 +5082,11 @@ function onDraftInputNew(e){
   else if(k==="targetBaseCost"){ cr.draftCond._autoBase=false; v=parseFloat(v); if(!isNaN(v)) cr.draftCond[k]=v; }
   else if(k==="posMinQty"||k==="posMaxQty"){ cr.draftCond[k==="posMinQty"?"_autoPosMin":"_autoPosMax"]=false; v=parseFloat(v); if(!isNaN(v)) cr.draftCond[k]=Math.max(0, Math.round(v)); }
   else if(k==="upGrids"||k==="downGrids"){ cr.draftCond._autoGrids=false; v=parseFloat(v); if(!isNaN(v)) cr.draftCond[k]=Math.max(0, Math.round(v)); }
+  else if(k==="qtyPerTrade"){ cr.draftCond._autoQty=false; v=parseFloat(v); if(!isNaN(v)) cr.draftCond[k]=Math.max(0, Math.round(v)); }
   else if(COND_FIELDS.find(f=>f.k===k && f.p)){ v=parseFloat(v)/100; if(!isNaN(v)) cr.draftCond[k]=v; }
   else { v=parseFloat(v); if(!isNaN(v)) cr.draftCond[k]=v; }
-  /* 间距变化（初始资金已确认且参数齐全时）重算上下网格，随后 recalcDerived 自动重算持仓上下限 */
-  if(k==="qtyPerTrade" || k==="spacingPct" || (k==="initCapital" && cr.draftCond._autoGrids)) onQtyChanged(cr.draftCond);
+  /* 方案②：间距/基准价/资金/底仓 变化 → 格数按市场低点重定、每笔数量按资金反推 */
+  if(k==="spacingPct" || k==="basePrice" || k==="initCapital" || k==="targetBaseCost") onQtyChanged(cr.draftCond, (cr.market? cr.market.kline : null), cr.market);
   recalcDerived(cr.draftCond, cr.market? cr.market.kline : null);
   syncAutoFields(cr.draftCond);
   syncPosInputs(cr.draftCond);
