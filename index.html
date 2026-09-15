@@ -2790,9 +2790,13 @@ const CAT_RHO = {
   stock:{broad_large:0.7,broad_mid:0.72,broad_growth:0.75,industry:0.8,dividend:0.6,bond:0.03,convertible:0.62,gold:0.05,commodity:0.15,overseas_us:0.15,overseas_hk:0.5,stock:0.5},
 };
 const IND_KEYS=["半导体","芯片","医药","医疗","生物","证券","银行","保险","白酒","食品饮料","军工","新能源","光伏","电池","电力","游戏","传媒","煤炭","石油","通信","消费","地产","钢铁","化工","有色","机器人","人工智能","旅游","农业","建材","汽车","军工"];
-function industryKey(name){
-  const nm=String(name||"");
-  for(let i=0;i<IND_KEYS.length;i++){ if(nm.indexOf(IND_KEYS[i])>=0) return IND_KEYS[i]; }
+/* 行业别名归一：这些词指的是同一条赛道，必须归为同一行业（否则会把 半导体ETF 与 芯片ETF 误判成"不同行业"而低估相关） */
+const IND_ALIAS={"芯片":"半导体","电池":"新能源","光伏":"新能源","医疗":"医药","保险":"银行","券商":"证券"};
+function industryKey(name, ind){
+  const nm=String(ind||"")+" "+String(name||"");
+  for(let i=0;i<IND_KEYS.length;i++){
+    if(nm.indexOf(IND_KEYS[i])>=0){ const k=IND_KEYS[i]; return IND_ALIAS[k]||k; }
+  }
   return "";
 }
 function isEtfCode(code){
@@ -2857,13 +2861,13 @@ function pairRho(gA, gB){
   const cA=symCat(gA.meta.code, gA.meta.name), cB=symCat(gB.meta.code, gB.meta.name);
   let r=CAT_RHO[cA][cB], note="类型先验";
   if(cA==="industry" && cB==="industry"){
-    const kA=industryKey(gA.meta.name), kB=industryKey(gB.meta.name);
+    const kA=industryKey(gA.meta.name, gA.meta.ind), kB=industryKey(gB.meta.name, gB.meta.ind);
     if(kA&&kB&&kA===kB){ r=0.90; note="同行业"; }
     else if(kA&&kB){ r=0.55; note="不同行业"; }
     else { r=0.60; note="行业间"; }
   } else if(cA==="stock" && cB==="industry" || cA==="industry" && cB==="stock"){
-    const sName=(cA==="stock"? gA : gB).meta.name, eName=(cA==="industry"? gA : gB).meta.name;
-    const kS=industryKey(sName), kE=industryKey(eName);
+    const sG=(cA==="stock"? gA : gB), eG=(cA==="industry"? gA : gB);
+    const kS=industryKey(sG.meta.name, sG.meta.ind), kE=industryKey(eG.meta.name, eG.meta.ind);
     if(kS&&kE&&kS===kE){ r=0.88; note="个股·同行业"; }
   }
   return {rho:r, src:"先验", n:(rr? rr.n : 0), note:note};
@@ -2910,34 +2914,54 @@ function pfRisk(members){
 }
 /* 可加入的分散化候选池（真实 ETF 代码；加入前会按你的实际持仓算 ρ） */
 const DIVERSIFY_POOL=[
-  {code:"sh511260", name:"十年国债ETF", cat:"bond"},
-  {code:"sh511010", name:"国债ETF", cat:"bond"},
-  {code:"sh511380", name:"可转债ETF", cat:"bond"},
-  {code:"sh518880", name:"黄金ETF", cat:"gold"},
-  {code:"sh513500", name:"标普500ETF", cat:"overseas_us"},
-  {code:"sh513100", name:"纳指ETF", cat:"overseas_us"},
-  {code:"sz159941", name:"纳指ETF广发", cat:"overseas_us"},
-  {code:"sh515450", name:"红利低波50ETF", cat:"dividend"},
-  {code:"sh512890", name:"红利低波ETF", cat:"dividend"},
-  {code:"sh510880", name:"红利ETF", cat:"dividend"},
-  {code:"sh513050", name:"中概互联ETF", cat:"overseas_hk"},
-  {code:"sh513180", name:"恒生科技ETF", cat:"overseas_hk"},
-  {code:"sz159980", name:"有色ETF", cat:"commodity"},
-  {code:"sz159985", name:"豆粕ETF", cat:"commodity"},
-  {code:"sh510050", name:"上证50ETF", cat:"broad_large"},
-  {code:"sh510500", name:"中证500ETF", cat:"broad_mid"},
-  {code:"sz159915", name:"创业板ETF", cat:"broad_growth"},
-  /* —— 个股候选：仅作"可选范围"参考。个股不是分散工具（自身波动高、有业绩/退市等个体风险），
-        加入后对组合波动的降低远不如债券/黄金；如使用请控制仓位，优先经营稳定、高股息、低波动的品种。 —— */
-  {code:"sh600900", name:"长江电力", cat:"stock", ind:"水电"},
-  {code:"sh601398", name:"工商银行", cat:"stock", ind:"银行"},
-  {code:"sh601939", name:"建设银行", cat:"stock", ind:"银行"},
-  {code:"sh600941", name:"中国移动", cat:"stock", ind:"通信"},
-  {code:"sh601088", name:"中国神华", cat:"stock", ind:"煤炭"},
-  {code:"sh601006", name:"大秦铁路", cat:"stock", ind:"铁路"},
-  {code:"sh600028", name:"中国石化", cat:"stock", ind:"石化"},
-  {code:"sh600519", name:"贵州茅台", cat:"stock", ind:"白酒"}
+  /* 每项 vol = 该类/该标的的年化波动先验（优先级高于 SYM_CAT 的类均值）；ind = 行业标签，用于判断"同行业" */
+  {code:"sh518880", name:"黄金ETF", cat:"gold", vol:0.17},
+  {code:"sh513500", name:"标普500ETF", cat:"overseas_us", vol:0.21},
+  {code:"sh513100", name:"纳指ETF", cat:"overseas_us", vol:0.26},
+  {code:"sz159941", name:"纳指ETF广发", cat:"overseas_us", vol:0.26},
+  {code:"sh513050", name:"中概互联ETF", cat:"overseas_hk", vol:0.34},
+  {code:"sh513180", name:"恒生科技ETF", cat:"overseas_hk", vol:0.36},
+  {code:"sz159980", name:"有色ETF", cat:"commodity", vol:0.26},
+  {code:"sz159985", name:"豆粕ETF", cat:"commodity", vol:0.25},
+  {code:"sh511380", name:"可转债ETF", cat:"convertible", vol:0.18},
+  {code:"sh515450", name:"红利低波50ETF", cat:"dividend", vol:0.18},
+  {code:"sh512890", name:"红利低波ETF", cat:"dividend", vol:0.18},
+  {code:"sh510880", name:"红利ETF", cat:"dividend", vol:0.19},
+  {code:"sh510050", name:"上证50ETF", cat:"broad_large", vol:0.21},
+  {code:"sh510500", name:"中证500ETF", cat:"broad_mid", vol:0.27},
+  {code:"sh512100", name:"中证1000ETF", cat:"broad_mid", vol:0.31},
+  {code:"sz159915", name:"创业板ETF", cat:"broad_growth", vol:0.42},
+  {code:"sh588000", name:"科创50ETF", cat:"broad_growth", vol:0.48},
+  /* —— 行业 / 主题：波动大、且不同行业之间相关度明显低于同风格宽基（约 0.55 vs 0.85），
+        是"既要波动、又要互补"时最实用的一类。同行业之间仍高达 0.90，不可叠加。 —— */
+  {code:"sh512480", name:"半导体ETF", cat:"industry", ind:"半导体", vol:0.46},
+  {code:"sz159995", name:"芯片ETF", cat:"industry", ind:"半导体", vol:0.46},
+  {code:"sz159819", name:"人工智能ETF", cat:"industry", ind:"人工智能", vol:0.45},
+  {code:"sh516010", name:"游戏ETF", cat:"industry", ind:"游戏", vol:0.42},
+  {code:"sh515790", name:"光伏ETF", cat:"industry", ind:"新能源", vol:0.42},
+  {code:"sh515030", name:"新能源车ETF", cat:"industry", ind:"新能源", vol:0.40},
+  {code:"sh512880", name:"证券ETF", cat:"industry", ind:"证券", vol:0.40},
+  {code:"sh512660", name:"军工ETF", cat:"industry", ind:"军工", vol:0.40},
+  {code:"sh512010", name:"医药ETF", cat:"industry", ind:"医药", vol:0.32},
+  {code:"sh512170", name:"医疗ETF", cat:"industry", ind:"医药", vol:0.34},
+  {code:"sh512690", name:"酒ETF", cat:"industry", ind:"白酒", vol:0.30},
+  {code:"sh515220", name:"煤炭ETF", cat:"industry", ind:"煤炭", vol:0.30},
+  {code:"sh512200", name:"房地产ETF", cat:"industry", ind:"地产", vol:0.32},
+  {code:"sz159825", name:"农业ETF", cat:"industry", ind:"农业", vol:0.28},
+  {code:"sh512800", name:"银行ETF", cat:"industry", ind:"银行", vol:0.22},
+  {code:"sh159611", name:"电力ETF", cat:"industry", ind:"电力", vol:0.21},
+  /* —— 个股：不是分散工具，仅作范围参考（vol 为个股自身量级，仍建议实测复核） —— */
+  {code:"sh600900", name:"长江电力", cat:"stock", ind:"电力", vol:0.17},
+  {code:"sh601398", name:"工商银行", cat:"stock", ind:"银行", vol:0.20},
+  {code:"sh601939", name:"建设银行", cat:"stock", ind:"银行", vol:0.20},
+  {code:"sh600941", name:"中国移动", cat:"stock", ind:"通信", vol:0.22},
+  {code:"sh601006", name:"大秦铁路", cat:"stock", ind:"铁路", vol:0.19},
+  {code:"sh600028", name:"中国石化", cat:"stock", ind:"石化", vol:0.22},
+  {code:"sh601088", name:"中国神华", cat:"stock", ind:"煤炭", vol:0.28},
+  {code:"sh600519", name:"贵州茅台", cat:"stock", ind:"白酒", vol:0.28}
 ];
+/* 取候选的年化波动先验：条目自带 vol 优先，否则用类别均值 */
+function poolVol(c){ return (c && c.vol>0)? c.vol : SYM_CAT[c.cat].annVol; }
 /* 「可加入的范围」分组展示顺序：从最能分散到最不能 */
 const POOL_GROUPS=[
   ["gold","黄金",1,"首选"],
@@ -2956,15 +2980,16 @@ const POOL_GROUPS=[
 function pfPoolRangeHTML(members){
   const ms=members||[];
   const groups=POOL_GROUPS.filter(function(g){
-    return DIVERSIFY_POOL.some(function(x){ return x.cat===g[0] && SYM_CAT[x.cat].annVol>=GRID_MIN_VOL; });
+    return DIVERSIFY_POOL.some(function(x){ return x.cat===g[0] && poolVol(x)>=GRID_MIN_VOL; });
   });
   const rows=groups.map(function(g){
-    const items=DIVERSIFY_POOL.filter(function(x){ return x.cat===g[0] && SYM_CAT[x.cat].annVol>=GRID_MIN_VOL; });
+    const items=DIVERSIFY_POOL.filter(function(x){ return x.cat===g[0] && poolVol(x)>=GRID_MIN_VOL; })
+      .sort(function(x,y){ return poolVol(y)-poolVol(x); });
     const chips=items.map(function(c){
-      const sig=SYM_CAT[c.cat].annVol;
+      const sig=poolVol(c);
       let rhoTxt="";
       if(ms.length){
-        const fake={meta:{code:c.code, name:c.name}, market:null};
+        const fake={meta:{code:c.code, name:c.name, ind:c.ind}, market:null};
         const arr=ms.map(function(x){ return pairRho(fake, x.g).rho; });
         const rb=ms.reduce(function(a,x,i){ return a+x.w*arr[i]; }, 0);
         const cls=(rb<=0.3? "g" : (rb>=0.75? "r" : "y"));
@@ -2980,14 +3005,16 @@ function pfPoolRangeHTML(members){
     return '<div class="pf-cat"><div class="pf-cat-t"><span class="pf-cat-p p'+g[2]+'">'+g[3]+'</span>'+g[1]+'</div><div class="pf-cat-b">'+chips+'</div></div>';
   }).join("");
   const exc=[];
+  const seen={};
   DIVERSIFY_POOL.forEach(function(x){
     const nm=SYM_CAT[x.cat].n;
-    if(SYM_CAT[x.cat].annVol<GRID_MIN_VOL && exc.indexOf(nm)<0) exc.push(nm+"（σ≈"+(SYM_CAT[x.cat].annVol*100).toFixed(0)+"%）");
+    if(poolVol(x)<GRID_MIN_VOL && !seen[nm]){ seen[nm]=1; exc.push(nm+"（σ≈"+(SYM_CAT[x.cat].annVol*100).toFixed(0)+"%）"); }
   });
   return rows + '<div class="hint" style="font-size:11px;margin-top:8px;line-height:1.7">'
     + '① <b>已排除波动不足的品种</b>：'+exc.join("、")+'。网格赚的是波动的钱——年化波动低于 '+(GRID_MIN_VOL*100).toFixed(0)+'% 时，最低 5 元手续费会吃掉 25% 以上的毛收益，波动越小越亏。'
-    + '<br>② <b>个股不是分散工具</b>（自身波动高、有退市风险，与宽基相关 0.5~0.8），如使用请控制仓位。'
-    + '<br>③ σ 与 ρ 为<b>类型先验</b>（个股取 35~40% 的类均值，个别差异极大——如长江电力约 15%、多数个股 35%+），点「拉取候选行情并回测」会用实测值复核。</div>';
+    + '<br>② <b>不同行业之间才是最实用的互补</b>：同风格宽基彼此 ρ≈0.85，而不同行业之间只有 ≈0.55——同为高波动，却能把风险错开。<b>但同一条赛道不可叠加</b>（半导体与芯片、光伏与新能源车均视为同一行业，ρ≈0.90）。'
+    + '<br>③ <b>个股不是分散工具</b>（自身波动高、有退市风险，与宽基相关 0.5~0.8），如使用请控制仓位。'
+    + '<br>④ σ 与 ρ 为<b>类型先验</b>（个股取 35~40% 的类均值，个别差异极大——如长江电力约 15%、多数个股 35%+），点「拉取候选行情并回测」会用实测值复核。</div>';
 }
 /* 候选建议：算每个候选取 t 权重加入后的 σ_p 降幅，按降幅排序 */
 function pfSuggestList(members, t){
@@ -2998,10 +3025,12 @@ function pfSuggestList(members, t){
   const keepW=norm.map(x=>x.w*(1-t));
   const list=[];
   DIVERSIFY_POOL.forEach(function(c){
-    const Vc=SYM_CAT[c.cat].annVol;
+    const Vc=poolVol(c);
     /* 硬门槛：波动不足的品种直接不进清单（网格赚的是波动的钱） */
     if(!(Vc>=GRID_MIN_VOL)) return;
-    const fake={meta:{code:c.code, name:c.name}, market:null};
+    /* 已经持有的标的不再推荐（避免"给自己的组合再加一遍"） */
+    if(norm.some(function(x){ return x.g.meta.code===c.code; })) return;
+    const fake={meta:{code:c.code, name:c.name, ind:c.ind}, market:null};
     const rhoArr=norm.map(function(x){ return pairRho(fake, x.g).rho; });
     const rhoBar=norm.reduce(function(a,x,i){ return a+x.w*rhoArr[i]; }, 0);
     const all=keepW.concat([t]);
@@ -3024,7 +3053,22 @@ function pfSuggestList(members, t){
       gridYield:gy1, eff:(sp1>0? gy1/sp1 : 0)});
   });
   /* 排序：加入后的「风险效率 = 年化网格收益 ÷ 组合波动」——既要有波动可吃，又要真分散 */
-  list.sort(function(a,b){ return b.eff-a.eff; });
+  /* 排序口径（用户可选）：
+     low  稳健 = 风险效率优先（单位组合波动能收割的网格收益最高）
+     mid  均衡 = 效率优先，但效率接近（≥最高效率 97%）时优先波动更大的——同样风险、绝对收益更高
+     high 进取 = 在"确实能分散"（与组合平均 ρ̄ ≤ 0.75）的候选里，按加入后的绝对网格收益排序 */
+  const mode=(state._pfOrd||"mid");
+  if(mode==="low"){
+    /* 稳健：按风险效率排序（单位组合波动能收割到的网格收益最高） */
+    list.sort(function(a,b){ return b.eff-a.eff; });
+  } else {
+    /* 均衡 / 进取：先在"确实能分散"的候选里筛，再按加入后的绝对网格收益排序（波动越大收益越高） */
+    const cap=(mode==="high"? 0.85 : 0.75);
+    const div=list.filter(function(x){ return x.rhoBar<=cap; });
+    const pool2=(div.length? div : list);
+    pool2.sort(function(a,b){ return b.gridYield-a.gridYield; });
+    list.length=0; pool2.forEach(function(x){ list.push(x); });
+  }
   /* 只留"加入后风险效率确实更高"的候选；若一个都没有（极端情形）则退回完整排序表 */
   const better=list.filter(function(x){ return x.eff>risk.eff+1e-9; });
   const pool=(better.length? better : list);
@@ -3090,10 +3134,9 @@ function pfDiversifyHTML(d, bare){
   const PFD=function(inner){ return bare? inner : '<div class="card"><div class="card-body">'+inner+'</div></div>'; };
   const SEC=function(t,note){ return '<div class="pf-sec"><span class="pf-sec-t">'+t+'</span>'+(note? '<span class="pf-sec-n">'+note+'</span>':'')+'</div>'; };
   const members=pfNormMembers(d);
+  /* 未选定第一个标的之前，本模块保持折叠——避免在还不知道要投什么时被候选清单淹没 */
   if(!members.length){
-    return PFD(SEC("可加入的范围","含具体代码 · 点击标签即加入")
-      + '<div style="font-size:12px;color:var(--muted);margin-bottom:2px">先在「选择标的」里确定成员。下面是网格可用的候选池，按分散能力从强到弱排列：</div>'
-      + pfPoolRangeHTML(members));
+    return PFD('<div class="empty">先在上方「选择标的」里确定<b>第一个成员</b>。确定后这里会立刻算出组合波动、年化网格收益与风险效率，并给出可加入的候选（含代码）。</div>');
   }
   const risk=pfRisk(members);
   const chips=members.map(function(x){
@@ -3117,14 +3160,28 @@ function pfDiversifyHTML(d, bare){
       + '</div><div class="hint" style="font-size:11.5px">'+divTxt+'。风险效率 = 年化网格收益 ÷ 组合波动，越高表示"承担同样波动能收割到更多网格利润"。'
       + (risk.miss? ' <span style="color:#8A6A2F">'+risk.miss+' 个标的缺行情，σ 按类型兜底。</span>':'') + '</div>'
     : '<div class="hint">成员缺行情，暂无法计算——可在总览「刷新行情」后回到本页。</div>';
-  const hi=(risk? risk.pairs : []).filter(function(p){ return p.rho>=0.75; }).sort(function(a,b){ return b.rho-a.rho; });
-  const hiHTML=(members.length<2)? "" : SEC("高度同向的成员对","ρ ≥ 0.75 等于同一笔风险")
+  const allPairs=(risk? risk.pairs : []).slice().sort(function(a,b){ return b.rho-a.rho; });
+  const hi=allPairs.filter(function(p){ return p.rho>=0.75; });
+  const lo=allPairs.length? allPairs[allPairs.length-1] : null;
+  const pairLine=function(p, tone){
+    return '<div>· '+esc(members[p.i].g.meta.name)+(members[p.i].g.meta.ind? '('+members[p.i].g.meta.ind+')':'')
+      + ' ↔ '+esc(members[p.j].g.meta.name)+(members[p.j].g.meta.ind? '('+members[p.j].g.meta.ind+')':'')
+      + ' <b style="color:'+tone+'">ρ='+p.rho.toFixed(2)+'</b> <span style="color:var(--muted);font-size:11.5px">'
+      + p.src+(p.n? ' · '+p.n+' 天':'')+(p.note? ' · '+p.note:'')+'</span></div>';
+  };
+  const hiHTML=(members.length<2)? "" : SEC("成员之间的相关性","ρ = 共同交易日对数收益的相关系数")
     + (hi.length
-      ? '<div style="font-size:12.5px;line-height:2">'+hi.map(function(p){
-          return '<div>· '+esc(members[p.i].g.meta.name)+' ↔ '+esc(members[p.j].g.meta.name)
-            + ' <b style="color:#8B2E22">ρ='+p.rho.toFixed(2)+'</b> <span style="color:var(--muted);font-size:11.5px">'
-            + p.src+(p.n? ' · '+p.n+' 天':'')+(p.note? ' · '+p.note:'')+'</span></div>'; }).join("")+'</div>'
-      : '<div style="font-size:12.5px;color:#2E7D5B">无（没有 ρ ≥ 0.75 的配对）</div>');
+      ? '<div style="font-size:12.5px;line-height:2"><div style="color:#8B2E22"><b>高度同向（ρ ≥ 0.75）——等于同一笔风险</b></div>'
+        + hi.map(function(p){ return pairLine(p,"#8B2E22"); }).join("") + '</div>'
+      : '<div style="font-size:12.5px;color:#2E7D5B">无 ρ ≥ 0.75 的高度同向配对 ✓</div>')
+    + (lo
+      ? '<div style="font-size:12.5px;line-height:2;margin-top:4px"><span style="color:#2E7D5B"><b>最互补的一对</b>（ρ 越低越能相互抵消）</span>'
+        + pairLine(lo,"#2E7D5B")
+        + (hi.length===allPairs.length
+            ? '<div style="font-size:11.5px;color:#8B2E22">注意：连最互补的一对都在 0.75 以上——当前成员之间基本没有互补空间，需要引入新的大类（黄金 / 海外 / 商品 / 不同行业）。</div>'
+            : '')
+        + '</div>'
+      : '');
   let sugHTML="";
   if(members.length>=2){
     const sug=pfSuggestList(members, 0.25);
@@ -3141,7 +3198,19 @@ function pfDiversifyHTML(d, bare){
         + '<td style="padding:6px 8px"><button class="btn sm ghost" onclick="pfQuickAdd(\''+x.code+'\')">加入</button></td>'
         + '</tr>';
     }).join("");
-    sugHTML=SEC("建议加入","按加入后的风险效率排序 · 假定占 25% 权重")
+    const ord=(state._pfOrd||"mid");
+    const ordBar='<div class="pf-mode" style="margin:0 0 10px">'
+      + '<button class="btn sm '+(ord==="low"?"active":"")+'" onclick="pfSetOrd(\'low\')">稳健 · 效率最高</button>'
+      + '<button class="btn sm '+(ord==="mid"?"active":"")+'" onclick="pfSetOrd(\'mid\')">均衡 · 收益优先</button>'
+      + '<button class="btn sm '+(ord==="high"?"active":"")+'" onclick="pfSetOrd(\'high\')">进取 · 波动最大</button>'
+      + '</div>'
+      + '<div class="hint" style="font-size:11.5px;margin-bottom:8px">'
+      + (ord==="low"? '稳健：按<b>风险效率</b>（网格收益 ÷ 组合波动）排序 —— 单位风险收割最多网格利润，组合最平稳，但绝对收益偏低。'
+        : ord==="high"? '进取：在 ρ̄ ≤ 0.85 的候选里按<b>绝对网格收益</b>排序 —— 波动最大、收益最高，同时允许较高相关，回撤也最大。'
+        : '均衡：在<b>真能分散</b>（与组合平均 ρ̄ ≤ 0.75）的候选里按<b>绝对网格收益</b>排序 —— 兼顾波动收益与分散，是默认口径。')
+      + '</div>';
+    sugHTML=SEC("建议加入","假定占 25% 权重 · 已排除你已持有的标的")
+      + ordBar
       + '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:720px">'
       + '<thead><tr style="color:var(--muted);text-align:left">'
       + '<th style="padding:6px 8px">候选</th><th style="padding:6px 8px">类别</th><th style="padding:6px 8px">波动 σ</th>'
@@ -3234,6 +3303,8 @@ function pfQuickAdd(code){
     toast("已加入「"+g.meta.name+"」"+(r? ("：覆盖 "+pct(r.W,0)+" · 间距 "+pct(r.sp,2)+" · "+r.N+" 格 · 每笔 "+fmt(r.q,0)+" 股") : "")+"；请在成员行填写计划资金");
   }).catch(e=>{ toast("加入失败："+((e&&e.message)||e)); });
 }
+/* 建议清单排序口径切换（稳健/均衡/进取） */
+function pfSetOrd(m){ state._pfOrd=m; try{save();}catch(e){} render(); }
 /* 组合页步骤卡：编号 + 标题 + 说明，统一卡头风格 */
 function pfStepCard(no, title, sub, body){
   return `<div class="pf-step">
@@ -3246,13 +3317,13 @@ function pfStepCard(no, title, sub, body){
 /* 新增组合独立页面 */
 function renderPortfolioNew(d){
   return `<section class="section" style="margin-top:6px">
-    <div class="lab"><span class="t">新增资产组合</span><span>四步：名称 → 选标的 → 看分散度 → 定预算</span></div>
+    <div class="lab"><span class="t">新增资产组合</span><span>四步：名称与预算 → 选标的 → 看分散度 → 看分配并保存</span></div>
     <div class="hint" style="font-size:11.5px">本页已并入原「新增标的 / 纳入已记录标的」全部功能。<b>决定成员是首要工作</b>——选完即可在「分散度与标的建议」里看到风险是否真的分散，再决定要不要补充标的。</div>
   </section>
-  ${pfStepCard(1,"组合名称","起个名字，便于在总览与收益聚合里区分", pfFormHTML(d,"name"))}
+  ${pfStepCard(1,"组合名称与预算","给组合起名，并填写计划投入（预算上限）——它决定各成员能分到多少资金", pfFormHTML(d,"name"))}
   ${pfStepCard(2,"选择标的","「＋ 新增标的」拉取新标的，「＋ 增加已记录的标的」勾选已有网格；各成员的计划资金与权重也在这一步填", pfFormHTML(d,"pick"))}
   ${pfStepCard(3,"分散度与标的建议","检查成员是否高度同向、该补哪一类；下方给出可加入的全部候选（含代码），点标签即加入", pfDiversifyHTML(d, true))}
-  ${pfStepCard(4,"组合预算与保存","填「计划投入」→ 查看分配建议 → 保存；保存前可先看下方预览", pfFormHTML(d,"plan"))}`;
+  ${pfStepCard(4,"分配建议与保存","查看按权重的资金分配是否够用 → 保存；保存前可先看下方预览", pfFormHTML(d,"plan"))}`;
 }
 function cancelPortfolioConfirm(){
   confirmModal("放弃新建组合","当前组合尚未保存，确认放弃？",()=>{ cancelPortfolio(); });
@@ -3324,6 +3395,7 @@ function pfFormHTML(d, part){
   const PF_NAME = `
     <div class="pline" style="margin-top:0">
       <div class="it"><div class="k">组合名称</div><input type="text" data-k="name" value="${d.name||""}" oninput="onPfInput(event)" placeholder="如：核心ETF组合"></div>
+      <div class="it"><div class="k">计划投入（¥）</div><input type="number" step="1000" min="0" data-k="totalCapital" value="${T||""}" oninput="onPfInput(event)" placeholder="如：90000" title="计划投入=预算上限：打算投进这个组合的总金额，按成员权重拆分并测算是否够用；不是已到账资产"></div>
     </div>`;
   const PF_PICK = `
     <div class="pf-mode" style="margin-top:0">
@@ -3337,10 +3409,6 @@ function pfFormHTML(d, part){
     `;
   const PF_PLAN = `
 ${realStrip}
-    <div class="pline" style="margin-top:14px">
-      <div class="it"><div class="k">计划投入（¥）</div><input type="number" step="1000" min="0" data-k="totalCapital" value="${T||""}" oninput="onPfInput(event)" placeholder="如：90000" title="计划投入=预算上限：你打算投进这个组合的总金额，将按成员权重拆分并测算是否够用；不是已到账资产"></div>
-      <div class="it"><div class="k">说明</div><div class="val" style="font-size:13px;font-weight:400;color:var(--muted);align-self:center">「计划投入」按成员权重拆分并测算是否够用；真实投入/资产见上方「组合现状」</div></div>
-    </div>
     <div id="pfAllocAdv">${pfAllocAdvHTML(d)}</div>
     <div class="acts-row" style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn sm ghost" onclick="pfEqualWeights()">平均分配</button>
@@ -5470,26 +5538,23 @@ function pfEditCompactHTML(d, part){
   }).join("");
   const ra=pfRealAssets(on);
   const freeCash=Math.max(0, T - (ra.invest>0? ra.invest:0));
-  const ED_TOP = `<div style="margin-top:10px">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
-      <label style="font-size:12px;color:var(--muted);white-space:nowrap">组合名称</label>
-      <input type="text" data-k="name" value="${d.name||""}" oninput="onPfInput(event)" placeholder="如：核心ETF组合" style="flex:1;min-width:140px;min-height:32px;padding:2px 8px;font-size:13px">
-      <span style="font-size:11.5px;color:var(--muted)">成员的增删请在组合详情页操作</span>
-    </div>
-    <div style="font-size:12px;font-weight:600;margin-bottom:6px">已纳入成员（${on.length} 个）</div>
-    ${memRows||`<div style="color:var(--muted);font-size:12px;padding:8px 0">暂无已纳入成员</div>`}
-  </div>`;
-  const ED_BOTTOM = `<div style="margin-top:10px">
+  const ED_NAME = `<div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <label style="font-size:12px;color:var(--muted);white-space:nowrap">组合名称</label>
+      <input type="text" data-k="name" value="${d.name||""}" oninput="onPfInput(event)" placeholder="如：核心ETF组合" style="flex:1 1 140px;min-width:120px;min-height:32px;padding:2px 8px;font-size:13px">
       <label style="font-size:12px;color:var(--muted);white-space:nowrap">计划投入（¥）</label>
       <input type="number" step="1000" min="0" data-k="totalCapital" value="${T||""}" oninput="onPfInput(event)" placeholder="如：80000" style="width:110px;min-height:32px;padding:2px 8px;font-size:13px" title="计划投入=预算上限">
-      <span style="font-size:11.5px;color:var(--muted)">按成员权重拆分并测算是否够用</span>
     </div>
-    ${freeCash>0 ? `<div style="margin-top:8px;font-size:11.5px;color:#8A6A2F;background:#FBF8F1;padding:6px 10px;border-radius:6px">未分配流动现金：<b>¥${fmt(freeCash,0)}</b>（计划投入 ¥${fmt(T,0)} − 已投入 ¥${fmt(ra.invest,0)}）</div>` : ""}
   </div>`;
-  if(part==="top") return ED_TOP;
-  if(part==="bottom") return ED_BOTTOM;
-  return ED_TOP+ED_BOTTOM;;
+  const ED_MEMBERS = `<div>
+    <div style="font-size:12px;font-weight:600;margin-bottom:6px">已纳入成员（${on.length} 个）</div>
+    ${memRows||`<div style="color:var(--muted);font-size:12px;padding:8px 0">暂无已纳入成员</div>`}
+    ${freeCash>0 ? `<div style="margin-top:8px;font-size:11.5px;color:#8A6A2F;background:#FBF8F1;padding:6px 10px;border-radius:6px">未分配流动现金：<b>¥${fmt(freeCash,0)}</b>（计划投入 ¥${fmt(T,0)} − 已投入 ¥${fmt(ra.invest,0)}）</div>` : ""}
+    <div style="margin-top:8px;font-size:11.5px;color:var(--muted)">成员的增删请在组合详情页操作。</div>
+  </div>`;
+  if(part==="name") return ED_NAME;
+  if(part==="members") return ED_MEMBERS;
+  return ED_NAME+ED_MEMBERS;
 }
 
 function renderPortfolioEdit(pf){
@@ -5514,9 +5579,10 @@ function renderPortfolioEdit(pf){
       <button class="btn sm ghost" onclick="cancelPortfolio()">取消</button></span></div>
     ${remind}
   </section>
-  ${pfStepCard(1,"组合名称与成员","成员增删请在组合详情页操作；这里只调整权重与计划资金", pfEditCompactHTML(d,"top"))}
-  ${pfStepCard(2,"分散度与标的建议","检查调整后的成员是否仍然高度同向；下方给出可加入的全部候选（含代码）", pfDiversifyHTML(d, true))}
-  ${pfStepCard(3,"组合预算与保存","改完「计划投入」后，回到本页顶部点「保存组合」", pfEditCompactHTML(d,"bottom"))}`;
+  ${pfStepCard(1,"组合名称与预算","填写计划投入（预算上限）与组合名称", pfEditCompactHTML(d,"name"))}
+  ${pfStepCard(2,"已纳入成员","调整各成员的权重与计划资金", pfEditCompactHTML(d,"members"))}
+  ${pfStepCard(3,"分散度与标的建议","检查调整后的成员是否仍然高度同向；下方给出可加入的全部候选（含代码）", pfDiversifyHTML(d, true))}
+  `;
 }
 function bindPortfolioDetail(){}
 /* 资产构成 · 移动端左右拖动查看（pointer 拖拽 + 滚动隐藏提示） */
