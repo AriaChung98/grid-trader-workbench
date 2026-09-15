@@ -372,6 +372,12 @@ tbody tr:hover{background:#FBFAF7}
 .pf-zone-t{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:6px}
 .pf-zone .pfmem{padding:7px 0}
 .pf-zone .pfmem .sub{font-size:11px}
+/* 组合页步骤卡：统一卡头（编号 + 标题 + 说明），与工作台其它 .card 同风格 */
+.pf-step{margin-top:14px}
+.pf-step .card{margin-top:0}
+.pf-step .card-body{padding:14px 16px}
+.pf-no{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:var(--ink);color:#fff;font-size:11.5px;font-weight:600;flex:0 0 auto;margin-right:8px;letter-spacing:0}
+@media (max-width:760px){ .pf-step .card-body{padding:12px} .pf-no{width:18px;height:18px;font-size:11px;margin-right:6px} }
 .pf-addline{display:grid;grid-template-columns:1fr 1.6fr auto;gap:8px;align-items:end;margin-top:8px}
 .pf-addline label{font-size:11px;color:var(--muted)}
 .pf-addline input{padding:8px 10px;min-height:42px;font-size:15px}
@@ -3023,15 +3029,16 @@ function pfNormMembers(d){
   return on.map((m,i)=>({ g:getGrid(m.gridId), w:w[i], plan:pfMemberNeed(m) })).filter(x=>x.g);
 }
 /* 分散度诊断 + 分层标的建议面板 */
-function pfDiversifyHTML(d){
+function pfDiversifyHTML(d, bare){
+  const PFD=function(inner){ return bare? inner : '<div class="card"><div class="card-body">'+inner+'</div></div>'; };
   const members=pfNormMembers(d);
   if(!members.length){
-    return `<div class="card"><div class="card-body">
+    return PFD(`
       <div style="font-size:13px;font-weight:500;margin-bottom:6px">分散度诊断与标的建议</div>
       <div class="empty" style="margin-bottom:4px">先在上方确定标的（「＋新增标的」或「＋增加已记录的标的」）。确定后这里会立刻算出 <b>组合年化波动、分散比、成员间相关系数</b>，并给出真正能分层风险的补充标的与回测依据。</div>
       <div style="font-size:12px;color:var(--muted);margin-top:6px">还没想好选什么？下面是可加入的全量候选范围（含代码，按"从最能分散到最不能"排列），点击任一标签即加入组合。<b>建议先用 2~3 个低相关的大类打底</b>（债券 / 黄金 / 海外），再考虑权益类。</div>
       ${pfPoolRangeHTML(members)}
-    </div></div>`;
+    `);
   }
   const risk=pfRisk(members);
   const cats=members.map(x=>{
@@ -3096,7 +3103,7 @@ function pfDiversifyHTML(d){
         : "先补宽基大盘（沪深300 / 上证50），再补债券与黄金。";
     sugHTML=`<div style="margin-top:10px;font-size:12.5px;line-height:1.9">你目前选的是 <b>${SYM_CAT[c].n}</b>。单个标的没有分散可言。建议顺序：${order}<br><span style="color:var(--muted)">再加入 1 个成员后，这里会按 σ 降幅给出排序与回测依据。</span></div>`;
   }
-  return `<div class="card"><div class="card-body">
+  return PFD(`
     <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;align-items:baseline">
       <div style="font-size:13px;font-weight:500">分散度诊断与标的建议</div>
       <div style="font-size:11.5px;color:var(--muted)">${members.length} 个成员 · 权重按当前设置归一化</div></div>
@@ -3105,7 +3112,7 @@ function pfDiversifyHTML(d){
     ${hiHTML}
     ${sugHTML}
     ${pfPoolRangeHTML(members)}
-  </div></div>`;
+  `);
 }
 /* 候选回测结果表 */
 function pfCandBtHTML(){
@@ -3175,19 +3182,25 @@ function pfQuickAdd(code){
     toast("已加入「"+g.meta.name+"」"+(r? ("：覆盖 "+pct(r.W,0)+" · 间距 "+pct(r.sp,2)+" · "+r.N+" 格 · 每笔 "+fmt(r.q,0)+" 股") : "")+"；请在成员行填写计划资金");
   }).catch(e=>{ toast("加入失败："+((e&&e.message)||e)); });
 }
+/* 组合页步骤卡：编号 + 标题 + 说明，统一卡头风格 */
+function pfStepCard(no, title, sub, body){
+  return `<div class="pf-step">
+    <div class="card">
+      <div class="card-h"><span class="card-title" style="align-items:center"><span class="pf-no">${no}</span>${title}</span><span class="card-sub">${sub||""}</span></div>
+      <div class="card-body">${body}</div>
+    </div>
+  </div>`;
+}
 /* 新增组合独立页面 */
 function renderPortfolioNew(d){
-  return `<section class="section">
-    <div class="lab"><span class="t">新增资产组合</span><span>定名称 → 选标的 → 看分散度建议 → 填计划资金 → 保存</span></div>
-    <div class="steps"><b>① 组合名称</b><span class="sep">→</span><b>② 选标的</b><span class="sep">→</span><b>③ 分散度与建议</b><span class="sep">→</span><b>④ 计划资金</b><span class="sep">→</span>⑤ 保存</div>
-    <div class="hint" style="font-size:11.5px">本页已并入原「新增标的 / 纳入已记录标的」全部功能：两种方式加入的成员都会出现在「已纳入成员」里，可直接填计划资金与权重。</div>
+  return `<section class="section" style="margin-top:6px">
+    <div class="lab"><span class="t">新增资产组合</span><span>四步：名称 → 选标的 → 看分散度 → 定预算</span></div>
+    <div class="hint" style="font-size:11.5px">本页已并入原「新增标的 / 纳入已记录标的」全部功能。<b>决定成员是首要工作</b>——选完即可在「分散度与标的建议」里看到风险是否真的分散，再决定要不要补充标的。</div>
   </section>
-  ${pfFormHTML(d,"top")}
-  <section class="section" style="margin-top:6px">
-    <div class="lab"><span class="t">分散度与标的建议</span><span>选完成员立即判断风险是否真分散，并按需补充标的</span></div>
-    ${pfDiversifyHTML(d)}
-  </section>
-  ${pfFormHTML(d,"bottom")}`;
+  ${pfStepCard(1,"组合名称","起个名字，便于在总览与收益聚合里区分", pfFormHTML(d,"name"))}
+  ${pfStepCard(2,"选择标的","「＋ 新增标的」拉取新标的，「＋ 增加已记录的标的」勾选已有网格；各成员的计划资金与权重也在这一步填", pfFormHTML(d,"pick"))}
+  ${pfStepCard(3,"分散度与标的建议","检查成员是否高度同向、该补哪一类；下方给出可加入的全部候选（含代码），点标签即加入", pfDiversifyHTML(d, true))}
+  ${pfStepCard(4,"组合预算与保存","填「计划投入」→ 查看分配建议 → 保存；保存前可先看下方预览", pfFormHTML(d,"plan"))}`;
 }
 function cancelPortfolioConfirm(){
   confirmModal("放弃新建组合","当前组合尚未保存，确认放弃？",()=>{ cancelPortfolio(); });
@@ -3256,22 +3269,22 @@ function pfFormHTML(d, part){
     ${ra.unstarted.length? `<div style="margin-top:7px;font-size:11.5px;color:#8A6A2F">未建仓标的 ${ra.unstarted.length} 个：${ra.unstarted.join("、")}（真实计 ¥0，录入首笔成交后自动计入）。</div>`:""}
     ${freeCash>0? `<div style="margin-top:7px;font-size:11.5px;color:#8A6A2F">计划投入中尚有 ¥${fmt(freeCash,0)} 未分配至任何标的，按流动现金计入资产（非某标的持仓）。</div>`:""}
   </div>`;
-  const PF_TOP = `
-    <div class="pf-hd"><div><div class="pf-name">${d.id? "编辑资产组合" : "新增资产组合"}</div>
-      <div class="pf-sub">先定标的 → 填「计划投入」→ 下方按 低/中/高 给出方案。</div></div></div>
-    <div class="pline" style="margin-top:12px">
+  const PF_NAME = `
+    <div class="pline" style="margin-top:0">
       <div class="it"><div class="k">组合名称</div><input type="text" data-k="name" value="${d.name||""}" oninput="onPfInput(event)" placeholder="如：核心ETF组合"></div>
-    </div>
-    <div class="pf-mode">
+    </div>`;
+  const PF_PICK = `
+    <div class="pf-mode" style="margin-top:0">
       <button class="btn sm ${d._ui==="new"?"active":""}" onclick="pfUiMode('new')">＋ 新增标的</button>
       <button class="btn sm ${d._ui==="rec"?"active":""}" onclick="pfUiMode('rec')">＋ 增加已记录的标的</button>
     </div>
     ${newZone}
     ${recZone}
     <div class="pf-grp" style="margin-top:16px">已纳入成员（<b id="pfOnCount">${on.length}</b> 个 · 权重自动凑足 100%）</div>
-    ${memRows||`<div class="pf-empty-tip">先在此确定标的（新增/已记录勾选），再设置「计划投入」。</div>`}
+    ${memRows||`<div class="pf-empty-tip">还没有成员——用上面的「＋ 新增标的」拉取新标的，或「＋ 增加已记录的标的」勾选已有网格。</div>`}
     `;
-  const PF_BOTTOM = `${realStrip}
+  const PF_PLAN = `
+${realStrip}
     <div class="pline" style="margin-top:14px">
       <div class="it"><div class="k">计划投入（¥）</div><input type="number" step="1000" min="0" data-k="totalCapital" value="${T||""}" oninput="onPfInput(event)" placeholder="如：90000" title="计划投入=预算上限：你打算投进这个组合的总金额，将按成员权重拆分并测算是否够用；不是已到账资产"></div>
       <div class="it"><div class="k">说明</div><div class="val" style="font-size:13px;font-weight:400;color:var(--muted);align-self:center">「计划投入」按成员权重拆分并测算是否够用；真实投入/资产见上方「组合现状」</div></div>
@@ -3283,8 +3296,11 @@ function pfFormHTML(d, part){
       <button class="btn sm primary" onclick="savePortfolio()">保存组合</button>
       <button class="btn sm ghost" onclick="cancelPortfolio()">取消</button>
     </div>`;
-  if(part==="top") return `<div class="pf-card prev">${PF_TOP}</div>`;
-  if(part==="bottom") return `<div class="pf-card prev">${PF_BOTTOM}</div><div id="pfPrev">${pfCardHTML(draftToPf(d), {preview:true})}</div></div>`;
+  const PF_PREV = `<div id="pfPrev">${pfCardHTML(draftToPf(d), {preview:true})}</div>`;
+  if(part==="name") return PF_NAME;
+  if(part==="pick") return PF_PICK;
+  if(part==="plan") return PF_PLAN + PF_PREV;
+  return PF_NAME + PF_PICK + PF_PLAN + PF_PREV;
   return `<div class="pf-card prev">${PF_TOP}${PF_BOTTOM}</div><div id="pfPrev">${pfCardHTML(draftToPf(d), {preview:true})}</div></div>`;
 }
 /* 成员「需要维持的资金」：已记录 = 已录投入(committed)；新增 = 计划资金 */
@@ -5445,13 +5461,10 @@ function renderPortfolioEdit(pf){
       <button class="btn sm primary" onclick="savePortfolio()">保存组合</button>
       <button class="btn sm ghost" onclick="cancelPortfolio()">取消</button></span></div>
     ${remind}
-    ${pfEditCompactHTML(d,"top")}
   </section>
-  <section class="section" style="margin-top:6px">
-    <div class="lab"><span class="t">分散度与标的建议</span><span>σ_p = √(ΣΣ wᵢwⱼσᵢσⱼρᵢⱼ)</span></div>
-    ${pfDiversifyHTML(d)}
-  </section>
-  <section class="section" style="margin-top:6px">${pfEditCompactHTML(d,"bottom")}</section>`;
+  ${pfStepCard(1,"组合名称与成员","成员增删请在组合详情页操作；这里只调整权重与计划资金", pfEditCompactHTML(d,"top"))}
+  ${pfStepCard(2,"分散度与标的建议","检查调整后的成员是否仍然高度同向；下方给出可加入的全部候选（含代码）", pfDiversifyHTML(d, true))}
+  ${pfStepCard(3,"组合预算与保存","改完「计划投入」后，回到本页顶部点「保存组合」", pfEditCompactHTML(d,"bottom"))}`;
 }
 function bindPortfolioDetail(){}
 /* 资产构成 · 移动端左右拖动查看（pointer 拖拽 + 滚动隐藏提示） */
