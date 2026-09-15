@@ -1174,40 +1174,49 @@ function computeBacktest(g){
   // 一笔交易都未发生（含 组合里刚"新增标的"的未建仓网格）：initCapital/plan 只是计划资金，不是已到账现金
   // → 投入基准记 0、实时总资产记 0，避免把"计划投入 6 万"误显示成"已有 6 万资产"。
   const committed = configured ? (started ? p.initCapital : 0) : (netInvestedPre + feeAmt);
-  let J=committed, I=0, K=0, buyAmt=0, sellAmt=0;   // 现金 / 持仓股数 / 移动平均成本合计(含费) / 累计买入(含费) / 累计卖出(净费)
+  /* 持仓成本口径 = 「配对剩余成本」（LIFO，最近买入优先）：
+     买入按批次(lot)记账；卖出时从"最近买入"的批次起逐批扣减，被扣掉的那部分批次成本 = 本笔卖出的成本，
+     本笔实现 = 卖出净得(扣卖出费) − 被扣成本(已含买入费)。
+     扣完后 剩余各批次成本合计 ÷ 剩余股数 = 持仓成本(每股)。
+     恒等式自动成立：总收益(totalAssets−committed) = 累计网格收益(已实现) + 持仓浮动(未实现)。 */
+  let J=committed, buyAmt=0, sellAmt=0, realized=0;   // 现金 / 累计买入(含费) / 累计卖出(净费) / 累计已实现网格收益
+  const lots=[];                                      // 买入批次：{qty, cost(含费)}；LIFO 从数组尾部扣
   const rows=[];
   for(const t of trades){
     const type=t.type, C=t.trigger, D=t.qty, L=t.close;
     const E=D*C, F=E*p.feeRate, G=Math.max(F,p.minFee);
-    let I2, K2, J2;
+    let realizedThis=0;
     if(type==="建仓"||type==="买入"){
-      I2=I+D; K2=K + (E+G); J2=J - (E+G);            // 建仓/买入：加股、加成本(含费)、减现金(含费)
-      buyAmt += E+G;
-    } else { // 卖出：移动平均法，按当前持仓均价(含费)减成本
-      const avg = I>0 ? K/I : C;
-      I2=I-D; K2=K - avg*D; J2=J + (E-G);
-      sellAmt += E-G;
+      lots.push({qty:D, cost:E+G});                   // 建仓/买入：登记批次、减现金(含费)
+      J -= (E+G); buyAmt += E+G;
+    } else {
+      const net=E-G; let need=D, consumed=0;          // 卖出：LIFO 逐批扣减
+      while(need>1e-9 && lots.length){
+        const lot=lots[lots.length-1];
+        const take=Math.min(need, lot.qty);
+        const per= lot.qty>0 ? lot.cost/lot.qty : 0;
+        consumed += per*take; lot.qty-=take; lot.cost-=per*take; need-=take;
+        if(lot.qty<=1e-9) lots.pop();
+      }
+      realizedThis = net - consumed;                  // 本笔实现（已扣买卖两端手续费）
+      realized += realizedThis; J += net; sellAmt += net;
     }
-    const M=L*I2, N=J2+M, T=(I2!==0?K2/I2:0);
-    // 已实现(落袋)网格收益 V：
-    //  已配置 → V = J2 + K2 − committed，与 totalProfit-持仓浮动 恒等式一致（含现金与持仓成本）；
-    //  建仓阶段 → 尚无网格成交，累计网格收益恒为 0（逐行均为 0，不随建仓笔数变化）。
-    // 注：committed 为全量净投入，建仓阶段若用 K2−committed 会在中间行出现负值（误将后续建仓成本计入），故直接置 0。
-    const V = configured ? (J2 + K2 - committed) : 0;
-    const holdInvested = I2!==0 ? (buyAmt - sellAmt)/I2 : 0;   // 持仓成本(逐行,含费) = 累计成交(含费买入−净费卖出) ÷ 累计持仓
-    rows.push({date:t.date,type,C,D,E,F,G,L,I:I2,J:J2,K:K2,M,N,T,V,cumBuy:buyAmt,cumSell:sellAmt,holdInvested});
-    I=I2;J=J2;K=K2;
+    let I2=0, K2=0; for(const l of lots){ I2+=l.qty; K2+=l.cost; }
+    const M=L*I2, N=J+M, T=(I2!==0?K2/I2:0);
+    const V = realized;                               // 累计网格收益（LIFO 配对·已实现）
+    const holdInvested = I2!==0 ? K2/I2 : 0;          // 持仓成本(每股) = 配对后剩余成本 ÷ 剩余持仓
+    rows.push({date:t.date,type,C,D,E,F,G,L,I:I2,J,K:K2,M,N,T,V,cumBuy:buyAmt,cumSell:sellAmt,holdInvested,realizedThis});
   }
   const cur = frozenCur(g);   // 停止网格时冻结为停止日收盘价（或当日现价）
   const last=rows[rows.length-1];
   const totalAssets = last ? (configured ? (last.J + cur*last.I) : (cur*last.I)) : 0;   // 无任何成交 → 0（未开始投入，无现金入账也无持仓）
   const totalProfit = totalAssets - committed;            // 【唯一真实利润口径：市值法 总资产−投入资金基准】
   const Vcum = last ? last.V : 0;                            // 已实现/落袋利润
-  const unrealized = totalProfit - Vcum;                     // 持仓浮动盈亏 = 总收益 − 已落袋（恒等于 cur*I − K）
-  const holdCost = last ? last.K : 0;                        // 持仓成本合计（移动平均法）
-  const holdCostPer = (last && last.I!==0) ? last.K/last.I : 0;   // 网格均价（移动平均每股成本）
-  const netInvested = buyAmt - sellAmt;                      // 累计净投入(含费) = 累计买入(含费) − 累计卖出(净费)
-  const holdCostInvested = (last && last.I!==0) ? netInvested/last.I : 0;   // 持仓成本(含费) = 累计成交(含费) ÷ 累计持仓
+  const unrealized = totalProfit - Vcum;                     // 持仓浮动盈亏 = 总收益 − 已落袋（恒等于 cur*I − 配对剩余成本K）
+  const holdCost = last ? last.K : 0;                        // 持仓成本合计（配对后剩余批次成本，含费）
+  const holdCostPer = (last && last.I!==0) ? last.K/last.I : 0;   // 持仓成本(每股) = 配对剩余成本 ÷ 剩余持仓
+  const netInvested = buyAmt - sellAmt;                      // 累计净投入(含费)：仅用于"已投入资金"展示，非成本口径
+  const holdCostInvested = holdCostPer;                      // 全链路统一：持仓成本 = 配对剩余成本（LIFO）
   const gridReturn = committed>0 ? totalProfit/committed : 0;
   const overallReturn = gridReturn;
   // 网格启动日 = 第一笔建仓当天（建仓阶段/补单后，以真实建仓日为准；无建仓记录则回退到条件单 p.startDate）
@@ -1702,7 +1711,7 @@ function syncAutoFields(d){
 }
 
 /* 网格策略模拟（草案即时对比用，成交驱动型）——与实际运行一致：
-   最新基准价(锚)随每一笔成交移动：跌破 锚×(1−间距) 买入、涨破 锚×(1+间距) 卖出（先进先出配对），
+   最新基准价(锚)随每一笔成交移动：跌破 锚×(1−间距) 买入、涨破 锚×(1+间距) 卖出（后进先出 LIFO 配对，与①持仓成本口径一致），
    一格成交后锚移到该格价，再触发只取相邻下一格；全网格上下轨 = 初始基准价×(1±间距)^格数，越界即穿轨不再提交。
    path 为收盘价序列；可选 hi/lo 为逐日最高/最低（与收盘对齐），用于识别盘中穿越（日波幅小于间距时尤其重要）。
    valPrice 为期末统一估值价（与详情页①实绩同用“最新收盘/现价”估值）；返回与 computeBacktest 对齐的
@@ -1713,14 +1722,14 @@ function simulateGrid(path, prm, hi, lo, valPrice, seedQty){
   if(!(base0>0) || !(qty>0)) return {realized:0, overall:0, gridRet:0, peak:0, totalAssets:init||0, totalProfit:0, unrealized:0, vGrid:0, buys:0, sells:0, holdRet:0, finalP:(path&&path.length)?path[path.length-1]:0};
   const upper= base0*Math.pow(1+sp, upN);      // 静态上轨（突破后暂停卖出）
   const lower = base0*Math.pow(1-sp, downN);   // 静态下轨（跌破后暂停买入）
-  let anchor=base0, cash=init, pos=0, cost=0, realized=0, peak=0, buys=0, sells=0;   // cost=移动平均成本合计(含费,与①口径一致)
+  let anchor=base0, cash=init, pos=0, realized=0, peak=0, buys=0, sells=0;
+  const lots=[];   // 买入批次 {qty, cost(含费)}：LIFO 配对（与①持仓成本口径一致）
   /* 期初预建底仓（seedQty>0 时）：仅用于"待建仓标的"的收益预测——按现价基准一次性虚拟建底仓，
      之后网格仍只买卖配对浮仓（底仓不参与卖出配对），使预测收益不为 0、也更接近"按推荐方案部署"的实况 */
   if(seedQty>0){
     const sFee=Math.max(seedQty*base0*feeRate, minFee);
-    if(cash > seedQty*base0 + sFee){ cash -= seedQty*base0 + sFee; pos = seedQty; cost += seedQty*base0 + sFee; }
+    if(cash > seedQty*base0 + sFee){ cash -= seedQty*base0 + sFee; pos = seedQty; lots.push({qty:seedQty, cost:seedQty*base0+sFee}); }
   }
-  const buyQ=[];
   for(let k=1;k<path.length;k++){
     const prev=path[k-1], b=path[k];
     const bHi = hi? hi[k] : b;                 // 当日最高
@@ -1731,18 +1740,25 @@ function simulateGrid(path, prm, hi, lo, valPrice, seedQty){
       const lv=anchor*(1-sp);
       const fee=Math.max(qty*lv*feeRate, minFee);
       if(cash < qty*lv+fee) break;             // 现金不足停止加仓
-      cash-=qty*lv+fee; pos+=qty; cost+=qty*lv+fee; buyQ.push(lv); realized-=fee; buys++;
+      cash-=qty*lv+fee; pos+=qty; lots.push({qty, cost:qty*lv+fee}); buys++;
       anchor=lv; px=lv;
     }
     /* —— 从最新价反弹到当日高点：逐格卖出（需有配对库存），锚随成交上移（不越过上轨） —— */
     px = anchor;                                // 以最新锚为上行起点（已买入则更低，可吃日内反弹）
     guard=0;
-    while(px<anchor*(1+sp) && bHi>=anchor*(1+sp) && anchor*(1+sp)<=upper+1e-9 && buyQ.length>0 && guard++<300){
+    while(px<anchor*(1+sp) && bHi>=anchor*(1+sp) && anchor*(1+sp)<=upper+1e-9 && lots.length>0 && guard++<300){
       const lv=anchor*(1+sp);
-      const bp=buyQ.shift();
       const fee=Math.max(qty*lv*feeRate, minFee);
-      const avg = pos>0? cost/pos : lv;
-      cash+=qty*lv-fee; pos-=qty; cost-=avg*qty; realized+=(lv-bp)*qty-fee; sells++;
+      const net=qty*lv-fee;
+      let need=qty, consumed=0;                     // LIFO：从最近买入批次起逐批扣减
+      while(need>1e-9 && lots.length){
+        const lot=lots[lots.length-1];
+        const take=Math.min(need, lot.qty);
+        const per= lot.qty>0 ? lot.cost/lot.qty : 0;
+        consumed+=per*take; lot.qty-=take; lot.cost-=per*take; need-=take;
+        if(lot.qty<=1e-9) lots.pop();
+      }
+      cash+=net; pos-=qty; realized+=net-consumed; sells++;
       anchor=lv; px=lv;
     }
     const occ=init-cash; if(occ>peak) peak=occ;
@@ -1751,8 +1767,9 @@ function simulateGrid(path, prm, hi, lo, valPrice, seedQty){
   const val = (valPrice && valPrice>0)? valPrice : finalP;   // 统一估值价（对齐①的当前收盘/现价）
   const totalAssets=cash+pos*val;
   const totalProfit=totalAssets-init;                        // 市值法总收益（= ① totalProfit 同定义）
-  const unrealized= pos>0? pos*val-cost : 0;                 // 持仓浮动（移动平均成本口径，同①）
-  const vGrid=totalProfit-unrealized;                        // 落袋网格收益（= ① Vcum 同定义）
+  const costRemain = lots.reduce((a,l)=>a+l.cost,0);         // 配对后剩余批次成本（含费）
+  const unrealized= pos>0? pos*val-costRemain : 0;           // 持仓浮动（配对剩余成本口径，同①）
+  const vGrid= realized;                                     // 累计网格收益 = 已实现（LIFO 配对，同① Vcum）
   const overall= init>0? totalProfit/init : 0;
   const gridRet=peak>0?realized/peak:0;
   return {realized, overall, gridRet, peak, totalAssets, totalProfit, unrealized, vGrid, buys, sells, holdRet:0, finalP};
@@ -4041,12 +4058,12 @@ function renderDetail(g){
           <div class="k">真实利润</div>
           <div class="v ${signClass(totProfit)}">${fmt(totProfit,2)}</div>
           <div class="subs">
-            <div><span>持仓浮动</span><b class="${signClass(sm.unrealized)}">${fmt(sm.unrealized,2)}</b></div>
-            <div><span>持仓成本</span><b title="含手续费：累计成交(含费买入−净费卖出)÷当前持仓股数">¥${fmt(sm.holdCostInvested,3)}</b></div>
+            <div><span>持仓浮动</span><b title="未实现浮动 = 真实利润 − 累计网格收益 = 现价×剩余持仓 − 配对剩余成本" class="${signClass(sm.unrealized)}">${fmt(sm.unrealized,2)}</b></div>
+            <div><span>持仓成本</span><b title="配对剩余成本(含费)：卖出按「最近买入优先(LIFO)」逐笔配对后，剩余持仓的买入成本 ÷ 剩余股数">¥${fmt(sm.holdCostInvested,3)}</b></div>
           </div>
         </div>
         <div class="rbh">
-          <div class="k">网格利润（累计网格收益）</div>
+          <div class="k">网格利润（累计网格收益）<span class="tip-anchor" data-tip="LIFO 配对：每笔卖出「净得(扣卖出费) − 被扣买入批次成本(含买入费)」的累计已实现额；与「持仓浮动」相加 = 真实利润（总资产 − 投入基准）。">口径</span></div>
           ${isConfigured(g)
             ? `<div class="v ${signClass(sm.Vcum)}">${fmt(sm.Vcum,2)}</div>
           <div class="subs">
@@ -4124,7 +4141,7 @@ function renderDetail(g){
       <div class="card-body">
         <div class="scroll" style="margin-top:0"><table><thead><tr>
           <th>日期</th><th>触发时间</th><th>类型</th><th>触发价</th><th>数量</th><th>当日收盘</th>
-          <th>累计现金</th><th>持仓市值</th><th>总资产</th><th>持仓成本</th><th>累计网格收益</th><th></th>
+          <th>累计现金</th><th>持仓市值</th><th>总资产</th><th title="配对剩余成本(含费)：LIFO 配对卖出后，剩余持仓的买入成本 ÷ 剩余股数">持仓成本</th><th title="LIFO 配对：每笔卖出净得 − 被扣买入批次成本(含费)，逐笔累计">累计网格收益</th><th></th>
         </tr></thead><tbody id="tradeBody">${tradeRows}</tbody></table></div>
         ${pager}
       </div>
