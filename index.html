@@ -87,6 +87,7 @@ h1{font-size:25px;font-weight:600;margin:5px 0 2px;letter-spacing:.01em;}
 .auto-rec-line{padding:3px 0;border-bottom:1px solid rgba(255,255,255,.08)}
 .auto-rec-line:last-child{border-bottom:0}
 .auto-rec-line .nm{color:#9FD3B6;font-weight:600}
+.auto-rec-line .pf{display:inline-block;padding:0 6px;border-radius:8px;font-size:10.5px;background:rgba(255,255,255,.14);color:#EDEDED;vertical-align:middle;white-space:nowrap}
 .auto-rec-line .tp-buy{color:#FF8A80}
 .auto-rec-line .tp-sell{color:#80CBC4}
 .tag.auto{background:#E7F0E9;color:#2E7D5B;border:1px solid #BFE0C8}
@@ -2340,6 +2341,13 @@ function getPf(id){ return pfList().find(p=>p.id===id)||null; }
 function pfMembersOfGrid(gid){
   return pfList().some(pf => (pf.members||[]).some(m=>m.gridId===gid));
 }
+/* 某标的所属的资产组合名（可能属于多个）。只统计"已纳入(on!==false)"的成员；
+   用于「今天要处理」的自动录入提示里标明该笔成交属于哪个组合。 */
+function pfNamesOfGrid(gid){
+  return pfList()
+    .filter(pf=>(pf.members||[]).some(m=>m.gridId===gid && m.on!==false))
+    .map(pf=>pf.name||"未命名组合");
+}
 function genPfId(){ return "pf_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,6); }
 function pfMembers(pf){ return (pf.members||[]).map(m=>Object.assign({},m,{g:getGrid(m.gridId)})).filter(m=>m.g); }
 /* 组合是否「条件单全部建立」：所有启用成员均已配置条件单（configured≠false）。用于收益总览模块在建立前显示回测、建立后切换为实际利润+实时总资产 */
@@ -3845,7 +3853,11 @@ function renderBandGlobal(sums){
   const autoTradesAll=[];
   state.grids.forEach(g=> g.trades.forEach(t=>{ if(t._auto && t.date===todayISO() && (t.type==='买入'||t.type==='卖出')) autoTradesAll.push({g,t}); }));
   if(autoTradesAll.length){
-    const detailRows = autoTradesAll.map(({g,t})=>`<div class="auto-rec-line"><span class="nm">「${g.meta.name}」</span> <span class="tp-${t.type==='买入'?'buy':'sell'}">${t.type}</span> ${fmt(t.qty,0)}股 @¥${fmt(t.trigger,3)}</div>`).join('');
+    const detailRows = autoTradesAll.map(({g,t})=>{
+      const pfs=pfNamesOfGrid(g.id);
+      const pfTxt = pfs.length? ` <span class="pf">组合·${esc(pfs.join("、"))}</span>` : "";
+      return `<div class="auto-rec-line"><span class="nm">「${g.meta.name}」</span>${pfTxt} <span class="tp-${t.type==='买入'?'buy':'sell'}">${t.type}</span> ${fmt(t.qty,0)}股 @¥${fmt(t.trigger,3)}</div>`;
+    }).join('');
     items.unshift(`<span class="tag ok">已自动录入</span> <span class="auto-rec-pop" tabindex="0" onclick="this.classList.toggle('open')">今日已自动录入 <b>${autoTradesAll.length}</b> 笔成交（条件单触发）<span class="auto-rec-tip"><div class="auto-rec-h">今日自动录入明细（${autoTradesAll.length} 笔）</div>${detailRows}</span></span>`);
   }
   if(totalTrades>=30 && !ackGet("bak:global")) items.push(`<span class="tag info">备份提醒</span> 已累计 ${totalTrades} 笔交易，建议导出 JSON 备份。${ackBtn("bak:global","已备份")}`);
@@ -5769,8 +5781,10 @@ function autoGridMonitor(){
     if(!logged.length) return;
     save(); render();
     logged.forEach(({g,added,touched})=>{
-      if(added.length) toast(`已自动录入「${g.meta.name}」今日${added.length}笔成交（成交驱动网格·已含触发时间）`);
-      else if(touched) toast(`已补全「${g.meta.name}」${touched} 笔自动成交的触发时间`);
+      const pfs=pfNamesOfGrid(g.id);
+      const pfTxt = pfs.length? ` · 组合 ${pfs.join("、")}` : "";
+      if(added.length) toast(`已自动录入「${g.meta.name}」今日${added.length}笔成交（成交驱动网格·已含触发时间）${pfTxt}`);
+      else if(touched) toast(`已补全「${g.meta.name}」${touched} 笔自动成交的触发时间${pfTxt}`);
     });
   });
 }
