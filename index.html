@@ -1687,87 +1687,171 @@ function condMarketRef(d, kline, market){
   }
   return {base, low52, low60, high52};
 }
-/* 条件单派生（方案②：市场定格数 + 资金定每笔）
-   ① 格数 = 覆盖到"市场低点(52周低/60日低 取更深)"所需格数 = ln(目标低点÷基准价) ÷ ln(1−间距)
-      → 间距↑ ⇒ 格数↓（每格价格跨度更大、格子更少、每格更重）
-   ② 每笔股数 = 可加仓资金(资金−底仓成本) ÷ 各下行格价格之和，整手向下取整 → 资金正好用满
-   手动覆盖优先：_autoGrids=false 时不动格数；_autoQty=false 时不动每笔数量。 */
-function autoGridsFromQty(d, kline, market){
+/* ============ 条件单参数设计规则（2026-09-15 蒙特卡洛定案）============
+   核心认识：三个旋钮（间距 / 底仓比例 / 极限目标）实际只有两个自由度——
+     自由变量① = 覆盖宽度 W（抗跌深度）  自由变量② = 底仓比例
+     格数由"资金 ÷ 最小单笔金额"决定；间距由 W 与格数反推 → "间距设多少"不能在间距本身上找答案。
+   规则 5 步：
+     ① σ = 年化波动 = 日波动 × √242
+     ② 覆盖宽度 W = σ（钳制 12%~55%）。不用"52周低"——那等于假设未来不再创新低
+     ③ 单笔金额下限 A_MIN = ¥2,100（最低手续费 5 元的效率下限，低于此值费/毛 > 30%）
+     ④ 格数 N = 网格资金(初始资金 − 底仓成本) ÷ A_MIN，钳制 [3, 30]
+     ⑤ 间距 sp = 1 − (1−W)^(1/N)
+     ⑥ 每笔股数 q = 网格资金 ÷ Σ各下行格价格，整手向下；若单笔金额 < A_MIN 则缩减 N
+     底仓 = 初始资金 × 50%（降到 40% 网格收益反降——底仓是上方卖出的弹药）
+   实测依据：加宽覆盖几乎不牺牲网格收益，但断粮率（现金耗尽概率）从 40~50% 断崖降到 2% 以内。
+   手动覆盖优先：_autoSp/_autoGrids/_autoQty/_autoBase = false 时不动对应字段。 */
+const PARAM_RULE={ A_MIN:2100, MIN_W:0.12, MAX_W:0.55, MIN_N:3, MAX_N:30, BASE_RATIO:0.50, ANN_DAYS:242 };
+/* 日波动率：优先行情对象，缺失时由日K推算 */
+function marketDailyVol(d, market, kline){
+  let dv=(market && market.dailyVol>0)? market.dailyVol : null;
+  if(!(dv>0) && kline && kline.length>1){
+    try{ const vc=buildVolCloses(kline, d.currentPrice); if(vc && vc.length>=40){ const v=volFromCloses(vc).dailyVol; if(v>0) dv=v; } }catch(e){}
+  }
+  return dv;
+}
+/* 纯计算：按规则给出参数（不写入 d）。manualSp=true 时保留用户间距，只按覆盖宽度定格数 */
+function paramRule(d, market, kline){
   const C=d.initCapital>0? d.initCapital:0;
   const base=d.basePrice>0? d.basePrice:0;
-  const sp=d.spacingPct>0? d.spacingPct:0;
-  if(!(C>0 && base>0 && sp>0)) return false;
-  const ref=condMarketRef(d, kline, market);
-  const lows=[ref.low52, ref.low60].filter(v=> v>0 && v<base);
-  const targetLow = lows.length? Math.min.apply(null, lows) : round(base*0.9,3);   // 无有效低点 → 退化为覆盖 −10%
-  let Nm=Math.ceil(Math.log(targetLow/base)/Math.log(1-sp) - 1e-9);
-  if(!(Nm>0)) Nm=1; if(Nm>40) Nm=40;
-  const autoN = (d._autoGrids!==false);
-  let N = autoN? Nm : Math.max(1, Math.round(d.downGrids||Nm));
-  const bq = d.targetBaseCost>0? Math.round(d.targetBaseCost) : Math.ceil(C/2/base/100)*100;
-  const sumPx=(n)=>{ let s=0; for(let k=1;k<=n;k++) s+=base*Math.pow(1-sp,k); return s; };
-  const qOf=(n)=>{ const s=sumPx(n); return (s>0 && C>base*bq)? Math.floor(((C-base*bq)/s)/100)*100 : 0; };
-  let q=qOf(N);
-  while(autoN && N>1 && q<100){ N--; q=qOf(N); }     // 资金不足 → 逐格缩减，至少保证每格 1 手
-  if(autoN){ d.upGrids=N; d.downGrids=N; d._autoGrids=true; }
-  d._mktLow=round(targetLow,3); d._mktLow52=ref.low52; d._mktLow60=ref.low60;
-  if(d._autoQty!==false && q>=100){ d.qtyPerTrade=q; d._autoQty=true; }
+  if(!(C>0 && base>0)) return null;
+  const dv=marketDailyVol(d, market, kline);
+  const sigAnn = dv>0? dv*Math.sqrt(PARAM_RULE.ANN_DAYS) : null;
+  const W = sigAnn!=null? Math.min(PARAM_RULE.MAX_W, Math.max(PARAM_RULE.MIN_W, sigAnn)) : null;
+  const manualSp = (d._autoSp===false) && d.spacingPct>0;
+  const bq = Math.max(100, Math.floor((C*PARAM_RULE.BASE_RATIO/base)/100)*100);
+  const gridCash = C - bq*base;
+  if(!(gridCash>0)) return null;
+  const sumPx=(n,s)=>{ let t=0; for(let k=1;k<=n;k++) t+=base*Math.pow(1-s,k); return t; };
+  const Wt=(W!=null? W : PARAM_RULE.MIN_W);
+  const spOf=(n)=> manualSp? d.spacingPct : (1 - Math.pow(1-Wt, 1/n));
+  let N;
+  if(manualSp && d.spacingPct>0 && d.spacingPct<1){
+    N = Math.ceil(Math.log(1-Wt)/Math.log(1-d.spacingPct) - 1e-9);
+    const capN = Math.floor(gridCash/PARAM_RULE.A_MIN);
+    N = Math.min(N, Math.max(PARAM_RULE.MIN_N, capN));
+  } else {
+    N = Math.floor(gridCash/PARAM_RULE.A_MIN);
+  }
+  N = Math.max(PARAM_RULE.MIN_N, Math.min(PARAM_RULE.MAX_N, N));
+  let sp = Math.round(spOf(N)*10000)/10000;
+  const qOf=(n,s)=>{ const t=sumPx(n,s); return (t>0)? Math.floor((gridCash/t)/100)*100 : 0; };
+  let q = qOf(N, sp);
+  while(N>PARAM_RULE.MIN_N && (q<100 || q*(sumPx(N,sp)/N) < PARAM_RULE.A_MIN)){
+    N--; sp = Math.round(spOf(N)*10000)/10000; q = qOf(N, sp);
+  }
+  const amt = q*(sumPx(N,sp)/N);
+  const fr=(d.feeRate!=null? d.feeRate : 0.0001), mf=(d.minFee!=null? d.minFee : 5);
+  const gross = amt*sp*(1-sp);
+  const feeRatio = gross>0? (2*Math.max(amt*fr, mf))/gross : 0;
+  return { N, sp, q, bq, W:(W!=null? W : null), sigAnn, dv, amt, gridCash,
+    lower: round(base*Math.pow(1-sp,N),3), upper: round(base*Math.pow(1+sp,N),3), feeRatio, manualSp };
+}
+/* 把规则结果写入草稿（尊重各字段的自动/手动标志） */
+function autoGridsFromQty(d, kline, market){
+  const r=paramRule(d, market, kline);
+  if(!r) return false;
+  d._rule=r;
+  if(d._autoSp!==false){ d.spacingPct=r.sp; }
+  if(d._autoGrids!==false){ d.upGrids=r.N; d.downGrids=r.N; }
+  if(d._autoQty!==false && r.q>=100){ d.qtyPerTrade=r.q; }
+  if(d._autoBase!==false && r.bq>=100){ d.targetBaseCost=r.bq; }
   return true;
 }
+/* 把派生字段的值同步回输入框（不抢焦点；手动字段不回写） */
 function syncGridInputs(d){
-  ["upGrids","downGrids","qtyPerTrade"].forEach(k=>{
-    const el=document.querySelector(`input[data-k="${k}"]`);
-    if(el && document.activeElement!==el) el.value=(d[k]!=null? d[k] : "");
+  const DERIV={spacingPct:"_autoSp", upGrids:"_autoGrids", downGrids:"_autoGrids", qtyPerTrade:"_autoQty", targetBaseCost:"_autoBase"};
+  COND_FIELDS.forEach(f=>{
+    const flag=DERIV[f.k]; if(!flag) return;
+    if(d[flag]===false) return;
+    const el=document.querySelector(`input[data-k="${f.k}"]`);
+    if(el && document.activeElement!==el) el.value = f.p? round((d[f.k]||0)*100,4) : (d[f.k]!=null? d[f.k] : "");
   });
 }
 function onQtyChanged(d, kline, market){ if(d && autoGridsFromQty(d, kline, market)) syncGridInputs(d); }
-/* 条件单"覆盖诊断"：市场低点各需几格、当前格数覆盖到哪、资金占用/闲置/缺口 */
+/* 条件单"参数依据"诊断：年化波动 → 覆盖宽度 → 格数/间距 → 单笔金额 → 资金占用 → 可触发性 → 手续费占比 */
 function condCoverHTML(d, kline, market, ownerId){
-  if(!(d && d.basePrice>0 && d.spacingPct>0)) return "";
-  const ref=condMarketRef(d, kline, market), base=d.basePrice, sp=d.spacingPct;
-  const needN=(t)=> (t>0 && t<base)? Math.max(1, Math.ceil(Math.log(t/base)/Math.log(1-sp)-1e-9)) : null;
-  const dn=d.downGrids||0, up=d.upGrids||0;
-  const lower=base*Math.pow(1-sp,dn), upper=base*Math.pow(1+sp,up);
+  if(!(d && d.basePrice>0)) return "";
+  const base=d.basePrice;
   const C=d.initCapital>0? d.initCapital:0;
-  const bq=d.targetBaseCost>0? Math.round(d.targetBaseCost) : (C>0? Math.ceil(C/2/base/100)*100 : 0);
-  let sumPx=0; for(let k=1;k<=dn;k++) sumPx+=base*Math.pow(1-sp,k);
-  const cost=base*bq + (d.qtyPerTrade||0)*sumPx;
-  const seg=[];
-  const n60=needN(ref.low60), n52=needN(ref.low52);
-  if(n60!=null || n52!=null){
-    seg.push(`市场低点：60日 ¥${fmt(ref.low60,3)} 需 <b>${n60||"—"}</b> 格 · 52周 ¥${fmt(ref.low52,3)} 需 <b>${n52||"—"}</b> 格`);
-  }
-  seg.push(`当前 上<b>${up}</b>/下<b>${dn}</b> 格 ⟹ 下轨 ¥${fmt(lower,3)}（${pct(lower/base-1,1)}）· 上轨 ¥${fmt(upper,3)}（${pct(upper/base-1,1)}）`);
-  if(C>0 && d.qtyPerTrade>0){
-    const idle=C-cost;
-    seg.push(`占用 ¥${fmt(cost,0)} / 资金 ¥${fmt(C,0)}` + (idle>=0? `，余 ¥${fmt(idle,0)}` : `，<b style="color:#B03021">超 ¥${fmt(-idle,0)}</b>`));
-  }
-  /* 可触发性：间距 ÷ 日波动率 ≈ 每格平均触发间隔（交易日）；间距 > 3×日波动 → 触发偏慢（与 recommend 的兜底规则一致） */
-  let dv=(market && market.dailyVol>0)? market.dailyVol : null;
-  if(dv==null && kline && kline.length>1){
-    try{ const vc=buildVolCloses(kline, d.currentPrice); if(vc&&vc.length>=40){ const v=volFromCloses(vc).dailyVol; if(v>0) dv=v; } }catch(e){}
-  }
+  const dn=Math.max(0, Math.round(d.downGrids||0)), up=Math.max(0, Math.round(d.upGrids||0));
+  const sp=d.spacingPct>0? d.spacingPct:0;
+  let r=null; try{ r=paramRule(d, market, kline); }catch(e){}
+  const dv=(r && r.dv>0)? r.dv : null;
+  const seg=[], seg2=[];
   if(dv>0){
-    const days=sp/dv, slow=(sp>dv*3);
-    seg.push(`可触发性：日波动 ${pct(dv,2)} ⟹ 每格约 <b>${days.toFixed(1)}</b> 交易日触发一次${slow? '（<b style="color:#B03021">间距已超日波动 3 倍，触发偏慢</b>）':''}`);
+    seg.push(`年化波动 <b>${pct(r.sigAnn,1)}</b>（日 ${pct(dv,2)}）→ 覆盖宽度取 <b>${pct(r.W,0)}</b>`);
+  } else {
+    seg.push(`<span style="color:#B03021">缺行情波动率</span>：请先「刷新行情」，否则只能按占位估算`);
   }
-  /* 资金利用率：建仓即投入多少，其余要等下跌逐格投入；跌到下轨才用满 */
-  if(C>0 && bq>0){
-    const hold0=base*bq;
-    seg.push(`资金利用率：建仓即投入 <b>${pct(hold0/C,0)}</b>${dn>0? `，跌到 ¥${fmt(lower,3)} 才用满`:""}`);
+  if(sp>0 && dn>0){
+    const Wcov=1-Math.pow(1-sp,dn);
+    seg.push(`当前 上<b>${up}</b>/下<b>${dn}</b> 格 ⟹ 覆盖 <b>${pct(Wcov,1)}</b> · 下轨 ¥${fmt(base*Math.pow(1-sp,dn),3)} · 上轨 ¥${fmt(base*Math.pow(1+sp,up),3)}`);
   }
-  const autoQ = d._autoQty!==false;
-  const toggle = ownerId? ` <button class="btn ghost mini" onclick="toggleQtyAuto('${ownerId}')">${autoQ?"改手动":"恢复自动"}</button>` : "";
-  return `<div class="hint" style="margin-top:6px">网格依据：${seg.join("；")}。<span class="tag ${autoQ?"ok":"info"}">每笔${autoQ?"自动":"手动"}</span>${toggle}</div>`;
+  if(C>0 && d.qtyPerTrade>0 && dn>0 && sp>0){
+    let sumPx=0; for(let k=1;k<=dn;k++) sumPx+=base*Math.pow(1-sp,k);
+    const bq=d.targetBaseCost>0? Math.round(d.targetBaseCost):0;
+    const amt=d.qtyPerTrade*(sumPx/Math.max(1,dn));
+    const cost=base*bq + d.qtyPerTrade*sumPx;
+    const idle=C-cost;
+    seg2.push(`底仓 <b>${fmt(bq,0)}</b> 股（占 ${pct(bq*base/C,0)}）· 单笔金额 <b>¥${fmt(amt,0)}</b>${amt<PARAM_RULE.A_MIN? ' <b style="color:#B03021">低于 ¥2,100 效率下限</b>':''}`);
+    seg2.push(`占用 ¥${fmt(cost,0)} / 资金 ¥${fmt(C,0)}`+(idle>=0? `，余 ¥${fmt(idle,0)}`:`，<b style="color:#B03021">超 ¥${fmt(-idle,0)}</b>`));
+  }
+  if(dv>0 && sp>0){
+    seg2.push(`可触发性 约 <b>${(sp/dv).toFixed(1)}</b> 交易日/格${sp>dv*3? '（<b style="color:#B03021">偏慢</b>）':''}`);
+  }
+  if(r && r.feeRatio>0){
+    seg2.push(`手续费占毛收益 <b>${pct(r.feeRatio,1)}</b>${r.feeRatio>0.25? '（<b style="color:#B03021">偏高</b>）':''}`);
+  }
+  const tag=(field,label,flag)=>{
+    const manual=(d[flag]===false);
+    return `<span class="tag ${manual?"info":"ok"}" style="cursor:pointer" title="点击切换 自动 / 手动" onclick="toggleCondAuto('${ownerId}','${field}')">${label}${manual?"·手动":"·自动"}</span>`;
+  };
+  const tags = ownerId? ["spacingPct|间距|_autoSp","upGrids|格数|_autoGrids","qtyPerTrade|每笔|_autoQty","targetBaseCost|底仓|_autoBase"]
+    .map(s=>{ const a=s.split("|"); return tag(a[0],a[1],a[2]); }).join(" ") : "";
+  const btn = ownerId? ` <button class="btn ghost mini" onclick="applyParamRule('${ownerId}')">按规则重算</button>` : "";
+  return `<div class="hint" style="margin-top:6px">
+    <div><b>参数依据</b>：${seg.join("；")}。</div>
+    ${seg2.length? `<div style="margin-top:3px">${seg2.join("；")}。</div>`:""}
+    ${tags? `<div style="margin-top:5px">${tags}${btn}</div>`:""}
+  </div>`;
 }
-/* 切换"每笔数量"自动/手动（仅详情页草稿） */
-function toggleQtyAuto(id){
-  const g=getGrid(id), d=g&&g._draft; if(!d) return;
-  d._autoQty = (d._autoQty===false)? true : false;
-  if(d._autoQty) autoGridsFromQty(d, (g.market? g.market.kline : g.pricePath), g.market);
-  syncGridInputs(d);
-  $("view").innerHTML=renderDetail(g); bindDetail(g);
-  toast(d._autoQty? "每笔数量：已恢复自动（按资金反推）" : "每笔数量：已改为手动（不再自动改写）");
+/* 草稿定位（详情页编辑 或 新建流程第2步） */
+function condDraftOf(ownerId){
+  if(ownerId==="new"){ const cr=state.creating; return (cr&&cr.draftCond)? {d:cr.draftCond, market:cr.market, kline:(cr.market? cr.market.kline:null), mode:"new"} : null; }
+  const g=getGrid(ownerId); if(!g||!g._draft) return null;
+  return {d:g._draft, market:g.market, kline:(g.market? g.market.kline : g.pricePath), mode:"edit", g};
+}
+function condRefresh(ownerId){
+  if(ownerId==="new"){ refreshNewDiag(); return; }
+  const g=getGrid(ownerId); if(g){ $("view").innerHTML=renderDetail(g); bindDetail(g); }
+}
+/* 一键按评价规则重算（全部字段恢复自动） */
+function applyParamRule(ownerId){
+  const ctx=condDraftOf(ownerId); if(!ctx) return;
+  const d=ctx.d;
+  d._autoSp=true; d._autoGrids=true; d._autoQty=true; d._autoBase=true;
+  autoGridsFromQty(d, ctx.kline, ctx.market);
+  recalcDerived(d, ctx.kline);
+  syncAutoFields(d); syncGridInputs(d); syncPosInputs(d);
+  condRefresh(ownerId);
+  const r=d._rule;
+  toast(r? ("已按评价规则重算：覆盖 "+pct(r.W,0)+" · 间距 "+pct(r.sp,2)+" · "+r.N+" 格 · 每笔 "+fmt(r.q,0)+" 股 · 单笔 ¥"+fmt(r.amt,0)) : "重算失败：请先填写基准价与计划投资额，并刷新行情");
+}
+/* 单个字段 自动/手动 切换 */
+function toggleCondAuto(ownerId, field){
+  const ctx=condDraftOf(ownerId); if(!ctx) return;
+  const d=ctx.d;
+  const flag={spacingPct:"_autoSp", upGrids:"_autoGrids", downGrids:"_autoGrids", qtyPerTrade:"_autoQty", targetBaseCost:"_autoBase"}[field];
+  if(!flag) return;
+  const manual=(d[flag]===false);
+  d[flag]= manual? true : false;
+  if(d[flag]){
+    autoGridsFromQty(d, ctx.kline, ctx.market);
+    recalcDerived(d, ctx.kline); syncAutoFields(d); syncGridInputs(d); syncPosInputs(d);
+  }
+  condRefresh(ownerId);
+  toast(field+"：已改为"+(d[flag]? "自动（按规则派生）":"手动（不再自动改写）"));
 }
 
 /* 条件单字段输入：百分比以 % 显示；只读字段以文本呈现 */
@@ -2641,6 +2725,407 @@ function draftToPf(d){
   return { id:d.id||null, name:d.name||"未命名组合", totalCapital:Number(d.totalCapital)||0,
            members:on.map(m=>({gridId:m.gridId, weight:Number(m.weight)||0})), createdAt:d.createdAt||"" };
 }
+/* ==================================================================
+   资产组合 · 相关性与分散度引擎
+   ------------------------------------------------------------------
+   问题：多个 A 股 ETF/个股往往高度同向（实测 沪深300ETF 与 科创50ETF 的 ρ=0.856），
+   名为"低/中/高风险"的组合其实只是权重不同，并没有真正分散风险。
+   做法：σ_p = √(ΣΣ wᵢwⱼσᵢσⱼρᵢⱼ)。ρ 优先用共同交易日的对数收益实测；
+   样本不足（<20 个共同交易日）时退回"类型先验矩阵"。
+   先验为经验值，仅用于没有历史行情时的排序参考，不能替代实测。
+   ================================================================== */
+const SYM_CAT = {
+  broad_large:{n:"宽基·大盘", ex:"沪深300 / 上证50", annVol:0.20},
+  broad_mid:{n:"宽基·中盘", ex:"中证500 / 中证1000", annVol:0.26},
+  broad_growth:{n:"宽基·成长", ex:"科创50 / 创业板", annVol:0.45},
+  industry:{n:"行业 / 主题", ex:"半导体 / 医药 / 证券", annVol:0.35},
+  dividend:{n:"红利 · 低波", ex:"红利ETF / 红利低波", annVol:0.18},
+  bond:{n:"债券", ex:"国债 / 政金债", annVol:0.03},
+  convertible:{n:"可转债", ex:"可转债ETF", annVol:0.18},
+  gold:{n:"黄金", ex:"黄金ETF", annVol:0.16},
+  commodity:{n:"商品", ex:"豆粕 / 有色 / 能化", annVol:0.22},
+  overseas_us:{n:"海外·美股", ex:"标普500 / 纳指", annVol:0.20},
+  overseas_hk:{n:"海外·中国香港", ex:"恒生科技 / 中概互联", annVol:0.30},
+  stock:{n:"个股", ex:"", annVol:0.40}
+};
+/* 类型先验相关系数（经验值；有共同历史行情时以实测为准） */
+const CAT_RHO = {
+  broad_large:{broad_large:1,broad_mid:0.88,broad_growth:0.85,industry:0.72,dividend:0.88,bond:0.05,convertible:0.62,gold:0.05,commodity:0.25,overseas_us:0.2,overseas_hk:0.65,stock:0.7},
+  broad_mid:{broad_large:0.88,broad_mid:1,broad_growth:0.85,industry:0.75,dividend:0.82,bond:0.05,convertible:0.65,gold:0.05,commodity:0.28,overseas_us:0.25,overseas_hk:0.68,stock:0.72},
+  broad_growth:{broad_large:0.85,broad_mid:0.85,broad_growth:1,industry:0.78,dividend:0.62,bond:0.03,convertible:0.72,gold:0.03,commodity:0.22,overseas_us:0.3,overseas_hk:0.75,stock:0.75},
+  industry:{broad_large:0.72,broad_mid:0.75,broad_growth:0.78,industry:1,dividend:0.65,bond:0.03,convertible:0.65,gold:0.05,commodity:0.3,overseas_us:0.2,overseas_hk:0.55,stock:0.8},
+  dividend:{broad_large:0.88,broad_mid:0.82,broad_growth:0.62,industry:0.65,dividend:1,bond:0.05,convertible:0.55,gold:0.1,commodity:0.3,overseas_us:0.15,overseas_hk:0.55,stock:0.6},
+  bond:{broad_large:0.05,broad_mid:0.05,broad_growth:0.03,industry:0.03,dividend:0.05,bond:1,convertible:0.35,gold:0.15,commodity:0.1,overseas_us:0.05,overseas_hk:0.05,stock:0.03},
+  convertible:{broad_large:0.62,broad_mid:0.65,broad_growth:0.72,industry:0.65,dividend:0.55,bond:0.35,convertible:1,gold:0.1,commodity:0.25,overseas_us:0.15,overseas_hk:0.5,stock:0.62},
+  gold:{broad_large:0.05,broad_mid:0.05,broad_growth:0.03,industry:0.05,dividend:0.1,bond:0.15,convertible:0.1,gold:1,commodity:0.35,overseas_us:0.15,overseas_hk:0.1,stock:0.05},
+  commodity:{broad_large:0.25,broad_mid:0.28,broad_growth:0.22,industry:0.3,dividend:0.3,bond:0.1,convertible:0.25,gold:0.35,commodity:0.55,overseas_us:0.2,overseas_hk:0.15,stock:0.15},
+  overseas_us:{broad_large:0.2,broad_mid:0.25,broad_growth:0.3,industry:0.2,dividend:0.15,bond:0.05,convertible:0.15,gold:0.15,commodity:0.2,overseas_us:1,overseas_hk:0.55,stock:0.15},
+  overseas_hk:{broad_large:0.65,broad_mid:0.68,broad_growth:0.75,industry:0.55,dividend:0.55,bond:0.05,convertible:0.5,gold:0.1,commodity:0.15,overseas_us:0.55,overseas_hk:1,stock:0.5},
+  stock:{broad_large:0.7,broad_mid:0.72,broad_growth:0.75,industry:0.8,dividend:0.6,bond:0.03,convertible:0.62,gold:0.05,commodity:0.15,overseas_us:0.15,overseas_hk:0.5,stock:0.5},
+};
+const IND_KEYS=["半导体","芯片","医药","医疗","生物","证券","银行","保险","白酒","食品饮料","军工","新能源","光伏","电池","电力","游戏","传媒","煤炭","石油","通信","消费","地产","钢铁","化工","有色","机器人","人工智能","旅游","农业","建材","汽车","军工"];
+function industryKey(name){
+  const nm=String(name||"");
+  for(let i=0;i<IND_KEYS.length;i++){ if(nm.indexOf(IND_KEYS[i])>=0) return IND_KEYS[i]; }
+  return "";
+}
+function isEtfCode(code){
+  const c=String(code||"").toLowerCase().replace(/^(sh|sz|bj)/,"");
+  return /^5\d{5}$/.test(c) || /^1[5-6]\d{4}$/.test(c);
+}
+/* 标的类型识别：优先关键词，其次代码段 */
+function symCat(code, name){
+  const c=String(code||"").toLowerCase().replace(/^(sh|sz|bj)/,""), nm=String(name||"");
+  const has=function(){ for(let i=0;i<arguments.length;i++){ if(nm.indexOf(arguments[i])>=0) return true; } return false; };
+  if(has("黄金","金ETF") || /^(518880|159934|518800|159937)$/.test(c)) return "gold";
+  if(has("转债") || /^511380$/.test(c)) return "convertible";
+  if(has("国债","政金债","债券","短融","城投债","地方债") || /^(511010|511260|511060|511360|511520|159972|511020)$/.test(c)) return "bond";
+  if(has("豆粕","有色","能源化工","能化","原油","白银","商品") || /^(159980|159985|162411|161129)$/.test(c)) return "commodity";
+  if(has("标普","纳斯达克","纳指","道琼斯") || /^(513100|513500|159941|513300|159632)$/.test(c)) return "overseas_us";
+  if(has("恒生","港股","中概","H股","恒指") || /^(513180|513050|159892|513130|510900)$/.test(c)) return "overseas_hk";
+  if(has("红利","低波","股息","央企","价值")) return "dividend";
+  if(has("科创","创业板","创业","双创","成长")) return "broad_growth";
+  if(has("中证500","中证1000","中证2000","1000","2000") || /^(510500|512100|159922|159845|563300)$/.test(c)) return "broad_mid";
+  if(has("沪深300","上证50","上证180","深证100","A50","A500","MSCI")) return "broad_large";
+  if(isEtfCode(c)) return "industry";
+  return "stock";
+}
+/* 单标的年化波动：与 marketDailyVol 同优先级（行情 dailyVol → annVol → 日K现算），×√242 保持一致 */
+function symAnnVol(g){
+  const m=g? g.market : null;
+  let dv=(m && m.dailyVol>0)? m.dailyVol : null;
+  if(!(dv>0) && m && m.annVol>0) dv = m.annVol/Math.sqrt(252);
+  if(!(dv>0) && m && m.kline && m.kline.length>=40){
+    try{ const vc=buildVolCloses(m.kline, m.price); if(vc){ const v=volFromCloses(vc).dailyVol; if(v>0) dv=v; } }catch(e){}
+  }
+  return dv>0? dv*Math.sqrt(242) : null;
+}
+function logRetSeries(kline){
+  const a=(kline||[]).filter(x=> x && x.close>0 && x.date);
+  const dates=[], rets=[];
+  for(let i=1;i<a.length;i++){ dates.push(a[i].date); rets.push(Math.log(a[i].close/a[i-1].close)); }
+  return {dates, rets};
+}
+/* 实测相关系数：共同交易日的对数收益 Pearson ρ；共同样本 <20 天返回 rho=null */
+function realizedRho(kA, kB){
+  const A=logRetSeries(kA), B=logRetSeries(kB);
+  if(!A.rets.length || !B.rets.length) return null;
+  const mb={}; for(let i=0;i<B.dates.length;i++) mb[B.dates[i]]=B.rets[i];
+  const x=[], y=[];
+  for(let i=0;i<A.dates.length;i++){ const v=mb[A.dates[i]]; if(v!=null){ x.push(A.rets[i]); y.push(v); } }
+  const n=x.length;
+  if(n<20) return {rho:null, n};
+  let mx=0, my=0; for(let i=0;i<n;i++){ mx+=x[i]; my+=y[i]; } mx/=n; my/=n;
+  let sxy=0, sxx=0, syy=0;
+  for(let i=0;i<n;i++){ const a=x[i]-mx, b=y[i]-my; sxy+=a*b; sxx+=a*a; syy+=b*b; }
+  if(!(sxx>0&&syy>0)) return {rho:null, n};
+  return {rho: Math.max(-1, Math.min(1, sxy/Math.sqrt(sxx*syy))), n};
+}
+/* 两个标的的相关系数：优先实测，否则类型先验 */
+function pairRho(gA, gB){
+  const rr=realizedRho(gA&&gA.market&&gA.market.kline, gB&&gB.market&&gB.market.kline);
+  if(rr && rr.rho!=null) return {rho:rr.rho, src:"实测", n:rr.n, note:""};
+  const cA=symCat(gA.meta.code, gA.meta.name), cB=symCat(gB.meta.code, gB.meta.name);
+  let r=CAT_RHO[cA][cB], note="类型先验";
+  if(cA==="industry" && cB==="industry"){
+    const kA=industryKey(gA.meta.name), kB=industryKey(gB.meta.name);
+    if(kA&&kB&&kA===kB){ r=0.90; note="同行业"; }
+    else if(kA&&kB){ r=0.55; note="不同行业"; }
+    else { r=0.60; note="行业间"; }
+  } else if(cA==="stock" && cB==="industry" || cA==="industry" && cB==="stock"){
+    const sName=(cA==="stock"? gA : gB).meta.name, eName=(cA==="industry"? gA : gB).meta.name;
+    const kS=industryKey(sName), kE=industryKey(eName);
+    if(kS&&kE&&kS===kE){ r=0.88; note="个股·同行业"; }
+  }
+  return {rho:r, src:"先验", n:(rr? rr.n : 0), note:note};
+}
+/* 组合风险：输入 [{g, w}]（w 需已归一化到合计 1） */
+function pfRisk(members){
+  const k=(members||[]).length;
+  if(!k) return null;
+  const V=members.map(x=>{ const v=symAnnVol(x.g); return (v>0? v : 0.35); });
+  const miss=members.filter((x,i)=>!(symAnnVol(x.g)>0)).length;
+  const pairs=[]; let varp=0;
+  for(let i=0;i<k;i++) for(let j=0;j<k;j++){
+    let r;
+    if(i===j) r=1;
+    else if(i<j){ const pr=pairRho(members[i].g, members[j].g); r=pr.rho; pairs.push({i,j,rho:r,src:pr.src,n:pr.n,note:pr.note}); }
+    else continue;
+    const mult=(i===j? 1 : 2);
+    varp += members[i].w*members[j].w*V[i]*V[j]*r*mult;
+  }
+  const sigmaP=Math.sqrt(Math.max(0, varp));
+  const wavg=members.reduce((a,x,i)=>a+x.w*V[i], 0);
+  return { sigmaP, wavg, divRatio:(sigmaP>0? wavg/sigmaP : 1), pairs, V, miss,
+    avgCorr: pairs.length? pairs.reduce((a,p)=>a+p.rho,0)/pairs.length : 1,
+    maxPair: pairs.length? pairs.reduce((a,p)=>(p.rho>a.rho? p:a)) : null };
+}
+/* 可加入的分散化候选池（真实 ETF 代码；加入前会按你的实际持仓算 ρ） */
+const DIVERSIFY_POOL=[
+  {code:"sh511260", name:"十年国债ETF", cat:"bond"},
+  {code:"sh511010", name:"国债ETF", cat:"bond"},
+  {code:"sh511380", name:"可转债ETF", cat:"bond"},
+  {code:"sh518880", name:"黄金ETF", cat:"gold"},
+  {code:"sh513500", name:"标普500ETF", cat:"overseas_us"},
+  {code:"sh513100", name:"纳指ETF", cat:"overseas_us"},
+  {code:"sz159941", name:"纳指ETF广发", cat:"overseas_us"},
+  {code:"sh515450", name:"红利低波50ETF", cat:"dividend"},
+  {code:"sh512890", name:"红利低波ETF", cat:"dividend"},
+  {code:"sh510880", name:"红利ETF", cat:"dividend"},
+  {code:"sh513050", name:"中概互联ETF", cat:"overseas_hk"},
+  {code:"sh513180", name:"恒生科技ETF", cat:"overseas_hk"},
+  {code:"sz159980", name:"有色ETF", cat:"commodity"},
+  {code:"sz159985", name:"豆粕ETF", cat:"commodity"},
+  {code:"sh510050", name:"上证50ETF", cat:"broad_large"},
+  {code:"sh510500", name:"中证500ETF", cat:"broad_mid"},
+  {code:"sz159915", name:"创业板ETF", cat:"broad_growth"}
+];
+/* 候选建议：算每个候选取 t 权重加入后的 σ_p 降幅，按降幅排序 */
+function pfSuggestList(members, t){
+  const risk=pfRisk(members);
+  if(!risk || !members.length) return {risk:risk, list:[], t:(t||0.25), holds:members};
+  t=t||0.25;
+  const norm=members.map(x=>({g:x.g, w:x.w}));
+  const keepW=norm.map(x=>x.w*(1-t));
+  const list=DIVERSIFY_POOL.map(c=>{
+    const fake={meta:{code:c.code, name:c.name}, market:null};
+    const rhoArr=norm.map(x=> pairRho(fake, x.g).rho);
+    const rhoBar=norm.reduce((a,x,i)=>a+x.w*rhoArr[i], 0);
+    const Vc=SYM_CAT[c.cat].annVol;
+    const all=keepW.concat([t]);
+    const V=risk.V.concat([Vc]);
+    let varp=0;
+    for(let i=0;i<all.length;i++) for(let j=0;j<all.length;j++){
+      let r;
+      if(i===j) r=1;
+      else if(i===all.length-1) r=rhoArr[j];
+      else if(j===all.length-1) r=rhoArr[i];
+      else r=pairRho(norm[i].g, norm[j].g).rho;
+      const mult=(i===j?1:2);
+      varp += all[i]*all[j]*V[i]*V[j]*r*mult*0.5;
+    }
+    const sp1=Math.sqrt(Math.max(0,varp));
+    return {code:c.code, name:c.name, cat:c.cat, catName:SYM_CAT[c.cat].n, rhoBar, sigmaP:sp1,
+      drop:(risk.sigmaP>0? (risk.sigmaP-sp1)/risk.sigmaP : 0), vol:Vc};
+  }).sort((a,b)=> b.drop-a.drop);
+  /* 同类别最多保留 2 个：避免清单被三个几乎相同的债券 ETF 占满 */
+  const cnt={}, uniq=[];
+  list.forEach(function(x){ cnt[x.cat]=(cnt[x.cat]||0)+1; if(cnt[x.cat]<=1) uniq.push(x); });
+  return {risk:risk, list:uniq, t:t, holds:norm};
+}
+/* 候选标的的"基本回测依据"：拉行情 → 年化波动 / 最大回撤 / 与组合实测ρ / 网格模拟 */
+/* 候选回测缓存（模块级，不写入存档/云端，避免把行情K线带进同步数据） */
+const PF_CAND_BT={};
+let PF_CAND_LOADING=false, PF_CAND_SHOWN=[];
+/* 批量拉取推荐候选的行情并回测（取 σ 降幅前 4 名） */
+function pfRunCandBt(){
+  const d=state.pfDraft; if(!d) return;
+  const members=pfNormMembers(d);
+  if(members.length<2){ toast("至少先纳入 2 个标的，才能评估「加入后」的分散效果"); return; }
+  const sug=pfSuggestList(members, 0.25);
+  const codes=sug.list.slice(0,4).map(x=>x.code);
+  const capital=Math.max(5000, Math.round((Number(d.totalCapital)||0)*0.25) || 20000);
+  PF_CAND_LOADING=true; PF_CAND_SHOWN=[]; render();
+  Promise.all(codes.map(c=> backtestCandidate(c, capital, members).catch(e=>({code:c, err:(e&&e.message)||"获取失败"}))))
+    .then(()=>{ PF_CAND_LOADING=false; PF_CAND_SHOWN=codes; render(); toast("候选行情与回测已就绪"); });
+}
+function backtestCandidate(code, capital, holds){
+  const cached=PF_CAND_BT[code];
+  if(cached) return Promise.resolve(cached);
+  return fetchMarket(code).then(m=>{
+    const k=(m.kline||[]).filter(x=>x && x.close>0);
+    const price=m.price || (k.length? k[k.length-1].close : 0);
+    if(!(price>0) || k.length<20) throw new Error("行情样本不足");
+    const closes=k.map(x=>x.close);
+    const vol=volFromCloses(closes);
+    let peak=0, mdd=0;
+    closes.forEach(c=>{ if(c>peak) peak=c; const dd=(peak>0? (peak-c)/peak : 0); if(dd>mdd) mdd=dd; });
+    const prm={basePrice:round(price,3), initCapital:capital, feeRate:0.0001, minFee:5, currentPrice:price};
+    const r=paramRule(prm, m, k);
+    let sim=null;
+    if(r && r.q>=100){
+      const s=simulateGrid(closes, {basePrice:round(price,3), spacingPct:r.sp, qtyPerTrade:r.q,
+        upGrids:r.N, downGrids:r.N, feeRate:0.0001, minFee:5, initCapital:capital},
+        k.map(x=>x.high), k.map(x=>x.low), price, r.bq);
+      sim={ gridRet:s.vGrid, totalProfit:s.totalProfit, buys:s.buys, sells:s.sells, N:r.N, sp:r.sp, q:r.q, amt:Math.round(r.amt) };
+    }
+    const rhos=(holds||[]).map(h=>{ const rr=realizedRho(k, h.g&&h.g.market&&h.g.market.kline); return {name:h.g.meta.name, rho:(rr&&rr.rho!=null? rr.rho : null), n:(rr?rr.n:0)}; });
+    const out={ code, name:m.name, days:k.length, from:(k[0]&&k[0].date)||"", to:(k[k.length-1]&&k[k.length-1].date)||"",
+      annVol:vol.annVol, mdd:mdd, price:round(price,3), sim:sim, rhos:rhos };
+    PF_CAND_BT[code]=out;
+    return out;
+  });
+}
+
+/* 组合成员归一化：[{g, w, plan}]（w 合计=1） */
+function pfNormMembers(d){
+  const on=((d&&d.members)||[]).filter(m=>m.on);
+  const raw=on.map(m=>Math.max(0, Number(m.weight)||0));
+  const sum=raw.reduce((a,b)=>a+b,0);
+  const w=raw.map(v=> sum>0? v/sum : 1/Math.max(1,on.length));
+  return on.map((m,i)=>({ g:getGrid(m.gridId), w:w[i], plan:pfMemberNeed(m) })).filter(x=>x.g);
+}
+/* 分散度诊断 + 分层标的建议面板 */
+function pfDiversifyHTML(d){
+  const members=pfNormMembers(d);
+  if(!members.length){
+    return `<div class="card"><div class="card-body"><div class="empty">先在上方确定标的（「＋新增标的」或「＋增加已记录的标的」）。确定后这里会立刻算出 <b>组合年化波动、分散比、成员间相关系数</b>，并给出真正能分层风险的补充标的与回测依据。</div></div></div>`;
+  }
+  const risk=pfRisk(members);
+  const cats=members.map(x=>{
+    const c=symCat(x.g.meta.code, x.g.meta.name), v=symAnnVol(x.g);
+    return `<span class="tag info" style="margin:0 6px 6px 0;display:inline-block">${esc(x.g.meta.name)} · ${SYM_CAT[c].n}${v? " · σ "+pct(v,1):""} · w ${pct(x.w,0)}</span>`;
+  }).join("");
+  const div=risk? risk.divRatio : 1;
+  const divTxt = div<1.05? '<b style="color:#B03021">几乎没有分散</b>——标的高度同向，三档风险只是权重不同'
+              : div<1.20? '<b style="color:#8A6A2F">分散有限</b>——建议再补充低相关标的'
+              : '<b style="color:#2E7D5B">分散良好</b>';
+  const kpiRow = (risk && members.length>=1)? `<div style="display:flex;gap:24px;flex-wrap:wrap;margin:10px 0">
+      <div><div style="font-size:11px;color:var(--muted)">组合年化波动 σ_p</div><div style="font-size:17px;font-weight:500">${pct(risk.sigmaP,1)}</div></div>
+      <div><div style="font-size:11px;color:var(--muted)">加权波动 Σwᵢσᵢ</div><div style="font-size:17px;font-weight:500">${pct(risk.wavg,1)}</div></div>
+      <div><div style="font-size:11px;color:var(--muted)">分散比 Σwσ ÷ σ_p</div><div style="font-size:17px;font-weight:500">${div.toFixed(2)}×</div></div>
+      <div><div style="font-size:11px;color:var(--muted)">平均相关 ρ̄</div><div style="font-size:17px;font-weight:500">${members.length>=2? risk.avgCorr.toFixed(2) : "—"}</div></div>
+    </div>
+    <div class="hint" style="font-size:11.5px">判读：${divTxt}。σ_p = √(ΣΣ wᵢwⱼσᵢσⱼρᵢⱼ)；ρ 优先用共同交易日对数收益实测，样本 < 20 天时退回类型先验。${risk.miss? ' <span style="color:#8A6A2F">其中 '+risk.miss+' 个标的缺行情，σ 按类型兜底。</span>':''}</div>`
+    : `<div class="hint">成员缺行情，暂无法计算组合波动率——可在总览「刷新行情」后回到本页。</div>`;
+  const hi=(risk? risk.pairs : []).filter(p=>p.rho>=0.75).sort((a,b)=>b.rho-a.rho);
+  const hiHTML = members.length<2? "" : (hi.length
+    ? `<div style="margin-top:10px;font-size:12.5px;line-height:1.9;color:#8B2E22"><b>高度同向（ρ ≥ 0.75：几乎等于同一笔风险）</b><br>${hi.map(p=>`· ${esc(members[p.i].g.meta.name)} ↔ ${esc(members[p.j].g.meta.name)}：ρ = <b>${p.rho.toFixed(2)}</b>（${p.src}${p.n? " · "+p.n+" 天":""}${p.note? " · "+p.note:""}）`).join("<br>")}</div>`
+    : `<div style="margin-top:10px;font-size:12.5px;color:#2E7D5B">成员之间没有 ρ ≥ 0.75 的高度同向配对。</div>`);
+  let sugHTML="";
+  if(members.length>=2){
+    const sug=pfSuggestList(members, 0.25);
+    const rows=sug.list.slice(0,6).map(x=>`<tr>
+      <td style="padding:5px 8px">${esc(x.name)}</td>
+      <td style="padding:5px 8px;color:var(--muted)">${x.code}</td>
+      <td style="padding:5px 8px">${x.catName}</td>
+      <td style="padding:5px 8px">${x.rhoBar.toFixed(2)}</td>
+      <td style="padding:5px 8px">${pct(x.vol,1)}</td>
+      <td style="padding:5px 8px">${pct(x.sigmaP,1)}</td>
+      <td style="padding:5px 8px;font-weight:500;color:${x.drop>0.10? "#2E7D5B":"#8A6A2F"}">↓${pct(x.drop,1)}</td>
+      <td style="padding:5px 8px"><button class="btn sm ghost" onclick="pfQuickAdd('${x.code}')">加入</button></td>
+    </tr>`).join("");
+    sugHTML=`<div style="margin-top:14px">
+      <div style="font-size:13px;font-weight:500;margin-bottom:6px">建议加入（按 σ 降幅排序 · 假定占 25% 权重，其余按原比例压缩）</div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:680px">
+        <thead><tr style="color:var(--muted);text-align:left">
+          <th style="padding:5px 8px">名称</th><th style="padding:5px 8px">代码</th><th style="padding:5px 8px">类别</th>
+          <th style="padding:5px 8px">与组合平均 ρ</th><th style="padding:5px 8px">单独波动</th>
+          <th style="padding:5px 8px">加入后 σ_p</th><th style="padding:5px 8px">σ 降幅</th><th style="padding:5px 8px"></th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center">
+        <button class="btn sm" onclick="pfRunCandBt()">${PF_CAND_LOADING? "拉取中…":"拉取候选行情并回测"}</button>
+        <span class="hint" style="font-size:11.5px">回测依据＝用候选的历史日K，按评价规则生成参数后跑一遍网格，给出年化波动 / 区间最大回撤 / 与组合成员的实测 ρ。</span>
+      </div>
+      ${pfCandBtHTML()}
+    </div>`;
+  } else {
+    const single=members[0], c=symCat(single.g.meta.code, single.g.meta.name);
+    const tips = (c==="broad_large"||c==="broad_mid")
+        ? ["债券 ETF（几乎零相关，首选）","黄金 ETF","海外·美股（标普500 / 纳指）","红利低波（同为 A 股，只能部分分散）"]
+      : (c==="broad_growth")
+        ? ["债券 ETF（首选）","黄金 ETF","海外·美股","红利低波（σ 更低，用来压低组合波动）"]
+      : (c==="industry"||c==="stock")
+        ? ["债券 ETF（首选，几乎零相关）","黄金 ETF","海外·美股","红利低波（换风格，不是换赛道）"]
+      : (c==="dividend")
+        ? ["债券 ETF","黄金 ETF","海外·美股"]
+        : ["宽基·大盘（沪深300 / 上证50）","债券 ETF","黄金 ETF"];
+    sugHTML=`<div style="margin-top:10px;font-size:12.5px;line-height:1.9">你目前选的是 <b>${SYM_CAT[c].n}</b>。单个标的没有分散可言，按"先补大类、再换风格"的顺序，可加入的范围是：<br>${tips.map(t=>"· "+t).join("<br>")}<br><span style="color:var(--muted)">再加入 1 个成员后，这里会给出按 σ 降幅排序的具体标的与回测依据。</span></div>`;
+  }
+  return `<div class="card"><div class="card-body">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;align-items:baseline">
+      <div style="font-size:13px;font-weight:500">分散度诊断与标的建议</div>
+      <div style="font-size:11.5px;color:var(--muted)">${members.length} 个成员 · 权重按当前设置归一化</div></div>
+    <div style="margin-top:8px">${cats}</div>
+    ${kpiRow}
+    ${hiHTML}
+    ${sugHTML}
+  </div></div>`;
+}
+/* 候选回测结果表 */
+function pfCandBtHTML(){
+  if(!PF_CAND_SHOWN.length) return "";
+  const rows=PF_CAND_SHOWN.map(code=>{
+    const b=PF_CAND_BT[code];
+    if(!b || b.err) return `<tr><td colspan="7" style="padding:6px 8px;color:#8A6A2F">${code} · ${(b&&b.err)||"无数据"}</td></tr>`;
+    const rhos=(b.rhos||[]).filter(r=>r.rho!=null);
+    const rhoTxt = rhos.length? rhos.map(r=>`${esc(r.name)} ρ=${r.rho.toFixed(2)}（${r.n}天）`).join("、") : "共同样本不足，无法实测";
+    const s=b.sim;
+    return `<tr>
+      <td style="padding:6px 8px">${esc(b.name)}<div style="font-size:11px;color:var(--muted)">${b.code}</div></td>
+      <td style="padding:6px 8px">${b.days} 日<div style="font-size:11px;color:var(--muted)">${b.from} ~ ${b.to}</div></td>
+      <td style="padding:6px 8px">${b.annVol!=null? pct(b.annVol,1) : "—"}</td>
+      <td style="padding:6px 8px">${pct(b.mdd,1)}</td>
+      <td style="padding:6px 8px;font-size:11.5px">${rhoTxt}</td>
+      <td style="padding:6px 8px">${s? (s.N+" 格 / "+pct(s.sp,2)+" / "+fmt(s.q,0)+" 股") : "—"}</td>
+      <td style="padding:6px 8px;color:${s&&s.gridRet>0? "#2E7D5B":"#8B2E22"}">${s? "¥"+fmt(s.gridRet,2)+"（"+s.buys+" 买 "+s.sells+" 卖）" : "—"}</td>
+    </tr>`;
+  }).join("");
+  return `<div style="margin-top:12px">
+    <div style="font-size:13px;font-weight:500;margin-bottom:6px">基本回测依据（样本内重放，非未来预测）</div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:760px">
+      <thead><tr style="color:var(--muted);text-align:left">
+        <th style="padding:6px 8px">候选</th><th style="padding:6px 8px">样本区间</th><th style="padding:6px 8px">年化波动</th>
+        <th style="padding:6px 8px">区间最大回撤</th><th style="padding:6px 8px">与组合成员实测 ρ</th>
+        <th style="padding:6px 8px">规则参数</th><th style="padding:6px 8px">网格落袋（样本内）</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <div class="hint" style="font-size:11px;margin-top:6px">样本仅约 40~60 个交易日（行情接口上限），统计意义有限；「网格落袋」是按评价规则参数在该样本上重放的落袋收益（含最低手续费、LIFO 配对），样本内未触发成交时会接近 0。</div>
+  </div>`;
+}
+/* 从建议清单一键加入候选标的（已记录则直接纳入；否则拉行情建待建仓网格） */
+function pfQuickAdd(code){
+  const d=state.pfDraft; if(!d) return;
+  const norm=normalizeCode(code);
+  const pool=DIVERSIFY_POOL.filter(x=>x.code===norm)[0];
+  const exist=state.grids.filter(x=>x.meta.code===norm);
+  if(exist.length){
+    let m=(d.members||[]).filter(x=>x.gridId===exist[0].id)[0];
+    if(!m){ m={gridId:exist[0].id, on:true, weight:0, rec:true}; d.members.push(m); }
+    m.on=true;
+    try{ pfSyncW(d, null); }catch(e){}
+    save(); render(); toast("已纳入已记录标的：「"+exist[0].meta.name+"」"); return;
+  }
+  toast("正在拉取「"+((pool&&pool.name)||code)+"」行情…");
+  fetchMarket(norm).then(m=>{
+    const price=m.price || (m.kline&&m.kline.length? m.kline[m.kline.length-1].close : 0);
+    if(!(price>0)) throw new Error("无有效价格");
+    const plan=Math.max(10000, Math.round((Number(d.totalCapital)||80000)*0.25) || 20000);
+    const prm={basePrice:round(price,3), initCapital:plan, feeRate:0.0001, minFee:5, currentPrice:round(price,3)};
+    const r=paramRule(prm, m, m.kline);
+    const params={ basePrice:round(price,3), startPrice:round(price,3),
+      spacingPct:(r? r.sp : 0.02), upGrids:(r? r.N : 5), downGrids:(r? r.N : 5),
+      qtyPerTrade:(r? r.q : 800), feeRate:0.0001, minFee:5, initCapital:plan,
+      targetBaseCost:(r? r.bq : Math.ceil(plan/2/price/100)*100),
+      currentPrice:round(price,3), startDate:todayISO() };
+    const sameCnt=state.grids.filter(x=>x.meta.code===norm).length;
+    const nm=(m.name&&String(m.name).trim())? String(m.name).trim() : ((pool&&pool.name)||norm);
+    const g=makeGrid({ meta:{code:norm, name: sameCnt>0? nm+" #"+(sameCnt+1) : nm},
+      cond:params, trades:[], pricePath:(m.kline||[]).map(x=>({date:x.date, close:x.close})), market:m, _sample:false });
+    g._pfNew=true; g._include=false; g.cond.configured=false;
+    try{ g.cond.history[0].note="组合分散化候选（行情推荐 · 待建仓）"; }catch(e){}
+    state.grids.push(g);
+    d.members.push({gridId:g.id, on:true, weight:0, rec:false, plan:plan});
+    try{ pfSyncW(d, null); }catch(e){}
+    save(); render();
+    toast("已加入「"+g.meta.name+"」"+(r? ("：覆盖 "+pct(r.W,0)+" · 间距 "+pct(r.sp,2)+" · "+r.N+" 格 · 每笔 "+fmt(r.q,0)+" 股") : "")+"；请在成员行填写计划资金");
+  }).catch(e=>{ toast("加入失败："+((e&&e.message)||e)); });
+}
+/* 新增组合独立页面 */
+function renderPortfolioNew(d){
+  return `<section class="section">
+    <div class="lab"><span class="t">新增资产组合</span><span>定名称 → 选标的 → 填计划资金 → 看分散度建议 → 保存</span></div>
+    <div class="steps"><b>① 组合名称</b><span class="sep">→</span><b>② 选标的</b><span class="sep">→</span><b>③ 计划资金</b><span class="sep">→</span><b>④ 分散度与建议</b><span class="sep">→</span>⑤ 保存</div>
+    <div class="hint" style="font-size:11.5px">本页已并入原「新增标的 / 纳入已记录标的」全部功能：两种方式加入的成员都会出现在「已纳入成员」里，可直接填计划资金与权重。</div>
+  </section>
+  ${pfFormHTML(d)}
+  <section class="section" style="margin-top:6px">
+    <div class="lab"><span class="t">分散度与标的建议</span><span>σ_p = √(ΣΣ wᵢwⱼσᵢσⱼρᵢⱼ)</span></div>
+    ${pfDiversifyHTML(d)}
+  </section>`;
+}
+function cancelPortfolioConfirm(){
+  confirmModal("放弃新建组合","当前组合尚未保存，确认放弃？",()=>{ cancelPortfolio(); });
+}
 function pfFormHTML(d){
   const T=Number(d.totalCapital)||0;
   const on=(d.members||[]).filter(m=>m.on);
@@ -2753,12 +3238,33 @@ function pfUiMode(mode){
   d._ui=(d._ui===mode)? null : mode;
   render();
 }
+/* 把"计划资金"按评价规则写入该成员的网格参数（仅对待建仓/未建立条件单的成员生效，不碰已运行网格） */
+function pfApplyRuleToMember(gridId){
+  const d=state.pfDraft; if(!d) return null;
+  const g=getGrid(gridId); if(!g) return null;
+  if(isConfigured(g)) return null;                    // 已建立条件单 → 不动
+  const mem=(d.members||[]).find(m=>m.gridId===gridId); if(!mem) return null;
+  const plan=Math.max(0, Number(mem.plan)||0);
+  if(!(plan>0)) return null;
+  const p=g.cond.params||{};
+  const base=(p.basePrice>0)? p.basePrice : ((g.market&&g.market.price)||0);
+  if(!(base>0)) return null;
+  const r=paramRule({basePrice:base, initCapital:plan,
+    feeRate:(p.feeRate!=null? p.feeRate:0.0001), minFee:(p.minFee!=null? p.minFee:5),
+    currentPrice:(g.market&&g.market.price)||p.currentPrice}, g.market, (g.market? g.market.kline : g.pricePath));
+  if(!r) return null;
+  p.initCapital=plan; p.spacingPct=r.sp; p.upGrids=r.N; p.downGrids=r.N;
+  p.qtyPerTrade=r.q; p.targetBaseCost=r.bq;
+  return r;
+}
 function onPfPlan(e){
   const d=state.pfDraft; if(!d) return;
   d._adopted=null;
   const id=e.target.dataset.id;
   const mem=(d.members||[]).find(m=>m.gridId===id); if(!mem) return;
   mem.plan=parseFloat(e.target.value)||0;
+  /* 待建仓成员：计划资金变化 → 按评价规则同步其网格参数（间距/格数/每笔/底仓） */
+  if(mem.rec===false) pfApplyRuleToMember(id);
   refreshPfAllocAdv();
 }
 function pfDelMember(id){
@@ -2789,16 +3295,17 @@ function pfAddNewMember(){
     const name = sameCnt>0 ? (baseName+" #"+(sameCnt+1)) : baseName;
     if(nameEl && !name0 && autoName) nameEl.value=autoName;   // 回填到输入框，方便继续核对
     const rec=recommend(m, price);
-    const plan = 60000;   // 仅作占位初始资金；实际投入在「已纳入成员」行内由用户填写
-    const base = rec.basePrice>0? rec.basePrice : price;
-    /* 每笔数量不硬编码 800：按"半仓现金÷下行各层触发价之和"与"底仓÷上格数"两约束推算（与条件单模块同口径），不足一手按一手 */
-    let qty=800;
-    const qSug=calcQtySug({initCapital:plan, basePrice:base, spacingPct:rec.spacingPct,
-      upGrids:rec.upGrids, downGrids:rec.downGrids, targetBaseCost: Math.ceil((plan/2/base)/100)*100});
-    if(qSug.valid && qSug.qty>0) qty=qSug.qty;
-    const params=Object.assign({}, rec, {initCapital:plan, qtyPerTrade:qty,
-      targetBaseCost: Math.ceil((plan/2/base)/100)*100,
-      currentPrice: round(price,3), startDate: todayISO()});
+    const plan = 60000;   // 仅作占位初始资金；用户在成员行填写计划资金后会按评价规则重算
+    const base = round(price,3);
+    /* 参数统一按评价规则派生：σ → 覆盖宽度 → 格数 → 间距 → 每笔股数（底仓=50%） */
+    const r=paramRule({basePrice:base, initCapital:plan,
+      feeRate:(rec.feeRate!=null? rec.feeRate:0.0001), minFee:(rec.minFee!=null? rec.minFee:5), currentPrice:base}, m, m.kline);
+    const params=Object.assign({}, rec, {
+      basePrice:base, initCapital:plan,
+      spacingPct:(r? r.sp : rec.spacingPct), upGrids:(r? r.N : rec.upGrids), downGrids:(r? r.N : rec.downGrids),
+      qtyPerTrade:(r? r.q : 800),
+      targetBaseCost:(r? r.bq : Math.ceil((plan/2/base)/100)*100),
+      currentPrice:base, startDate: todayISO() });
     const g=makeGrid({meta:{code, name}, cond:params, trades:[],
       pricePath:(m.kline||[]).map(x=>({date:x.date, close:x.close})), market:m, _sample:false});
     g._pfNew=true;
@@ -3711,6 +4218,7 @@ function render(){
   const v=$("view");
   if(state.settings){ v.innerHTML = renderSettings(); return; }
   if(state.creating){ v.innerHTML = renderNewGrid(); bindNewGrid(); return; }
+  if(state.pfDraft && !state.pfDraft.id){ v.innerHTML = renderPortfolioNew(state.pfDraft); return; }
   if(state.activePfId){ const pf=getPf(state.activePfId); if(pf){
       /* 编辑模式：草稿存在且针对当前组合 → 渲染详情页内编辑视图（含暂停网格提醒） */
       if(state.pfDraft && state.pfDraft.id===state.activePfId){ v.innerHTML = renderPortfolioEdit(pf); return; }
@@ -3723,8 +4231,10 @@ function render(){
 function renderHeader(){
   const h=$("hdr");
   let tools = ``;
-  if(state.activeId || state.creating || state.activePfId || state.settings){
-    tools = `<button class="btn" onclick="state.creating?cancelNewConfirm():back()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg><span class="txt">返回总览</span></button>`;
+  const inPfDraft = !!(state.pfDraft && !state.pfDraft.id);
+  if(state.activeId || state.creating || state.activePfId || state.settings || inPfDraft){
+    const backFn = state.creating? "cancelNewConfirm()" : (inPfDraft? "cancelPortfolioConfirm()" : "back()");
+    tools = `<button class="btn" onclick="${backFn}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg><span class="txt">返回总览</span></button>`;
   } else {
     tools = `<button class="btn primary" onclick="startNew()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg><span class="txt">新增网格交易</span></button>
       <button class="btn" id="allMktBtn" onclick="refreshAllPrices()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/></svg><span class="txt">刷新行情</span></button>
@@ -3847,7 +4357,6 @@ function renderOverview(){
   <section class="section">
     <div class="lab"><span class="t">资产组合</span><span>
       <button class="btn sm" onclick="startPortfolio()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg><span class="txt">新增资产组合</span></button></span></div>
-    ${state.pfDraft? pfFormHTML(state.pfDraft) : ""}
     ${state.pfPick? pfPickHTML(state.pfPick) : ""}
     <div class="ov">${pfRows}${pfEmpty}</div>
   </section>
@@ -4383,7 +4892,7 @@ function renderNewGrid(){
   }).join("");
   const gl = gridLevels(d);
   const recInfo = cr.recommend ? `<div class="hint">推荐：基准 ¥${fmt(cr.recommend.basePrice,3)} · 间距 ${pct(cr.recommend.spacingPct,2)} · 上 ${cr.recommend.upGrids}/下 ${cr.recommend.downGrids} 格（已填入，可改）。</div>` : "";
-  const coverInfo = condCoverHTML(d, (m? m.kline : null), m, "");
+  const coverInfo = condCoverHTML(d, (m? m.kline : null), m, "new");
   return `<section class="section">
     <div class="lab"><span class="t">新增网格交易 · 第 2 步</span><span>${name}（${code}）</span></div>
     <div class="steps"><span>① 输入代码</span><span class="sep">→</span><b>② 行情与推荐</b><span class="sep">→</span>③ 确认锁定</div>
@@ -4651,7 +5160,8 @@ function openGridEdit(id){ const g=getGrid(id); if(!g) return; g._editing=true; 
 function openPfMember(id){ state._pfFrom=state.activePfId||null; openGrid(id); }
 function back(){
   const backPf = (state.activePfId==null && state.activeId && state._pfFrom) ? state._pfFrom : null;
-  state.creating=null; state.activeId=null; state.activePfId=null; state.settings=false;
+  if(state.pfDraft && !state.pfDraft.id){ cancelPortfolio(); return; }
+  state.creating=null; state.activeId=null; state.activePfId=null; state.settings=false; state.pfDraft=null;
   state.grids.forEach(g=>{ g._editing=false; g._draft=null; g._setupMode=false; g._histEdit=null; g._hdraft=null; });
   if(backPf){ state.activePfId=backPf; state._pfFrom=null; }
   save(); render();
@@ -4859,6 +5369,10 @@ function renderPortfolioEdit(pf){
       <button class="btn sm ghost" onclick="cancelPortfolio()">取消</button></span></div>
     ${remind}
     ${pfEditCompactHTML(d)}
+  </section>
+  <section class="section" style="margin-top:6px">
+    <div class="lab"><span class="t">分散度与标的建议</span><span>σ_p = √(ΣΣ wᵢwⱼσᵢσⱼρᵢⱼ)</span></div>
+    ${pfDiversifyHTML(d)}
   </section>`;
 }
 function bindPortfolioDetail(){}
@@ -5077,12 +5591,13 @@ function onDraftInput(id,e){
   else if(k==="startPrice"){ g._draft._autoStart=false; v=parseFloat(v); if(!isNaN(v)) g._draft[k]=v; }
   else if(k==="targetBaseCost"){ g._draft._autoBase=false; v=parseFloat(v); if(!isNaN(v)) g._draft[k]=v; }
   else if(k==="posMinQty"||k==="posMaxQty"){ g._draft[k==="posMinQty"?"_autoPosMin":"_autoPosMax"]=false; v=parseFloat(v); if(!isNaN(v)) g._draft[k]=Math.max(0, Math.round(v)); }
+  else if(k==="spacingPct"){ g._draft._autoSp=false; v=parseFloat(v)/100; if(!isNaN(v)) g._draft[k]=v; }
   else if(k==="upGrids"||k==="downGrids"){ g._draft._autoGrids=false; v=parseFloat(v); if(!isNaN(v)) g._draft[k]=Math.max(0, Math.round(v)); }
   else if(k==="qtyPerTrade"){ g._draft._autoQty=false; v=parseFloat(v); if(!isNaN(v)) g._draft[k]=Math.max(0, Math.round(v)); }
   else if(COND_FIELDS.find(f=>f.k===k && f.p)){ v=parseFloat(v)/100; if(!isNaN(v)) g._draft[k]=v; }
   else { v=parseFloat(v); if(!isNaN(v)) g._draft[k]=v; }
-  /* 方案②：间距/基准价/资金/底仓 变化 → 格数按市场低点重定、每笔数量按资金反推；手动改每笔数量则标记为手动 */
-  if(k==="spacingPct" || k==="basePrice" || k==="initCapital" || k==="targetBaseCost") onQtyChanged(g._draft, (g.market? g.market.kline : g.pricePath), g.market);
+  /* 基准价/计划投资额变化 → 按评价规则重算覆盖宽度、格数、间距、每笔、底仓（手动字段不动） */
+  if(k==="basePrice" || k==="initCapital") onQtyChanged(g._draft, (g.market? g.market.kline : g.pricePath), g.market);
   recalcDerived(g._draft, (g.market? g.market.kline : g.pricePath));
   syncAutoFields(g._draft);
   syncPosInputs(g._draft);
@@ -5096,12 +5611,13 @@ function onDraftInputNew(e){
   else if(k==="startPrice"){ cr.draftCond._autoStart=false; v=parseFloat(v); if(!isNaN(v)) cr.draftCond[k]=v; }
   else if(k==="targetBaseCost"){ cr.draftCond._autoBase=false; v=parseFloat(v); if(!isNaN(v)) cr.draftCond[k]=v; }
   else if(k==="posMinQty"||k==="posMaxQty"){ cr.draftCond[k==="posMinQty"?"_autoPosMin":"_autoPosMax"]=false; v=parseFloat(v); if(!isNaN(v)) cr.draftCond[k]=Math.max(0, Math.round(v)); }
+  else if(k==="spacingPct"){ cr.draftCond._autoSp=false; v=parseFloat(v)/100; if(!isNaN(v)) cr.draftCond[k]=v; }
   else if(k==="upGrids"||k==="downGrids"){ cr.draftCond._autoGrids=false; v=parseFloat(v); if(!isNaN(v)) cr.draftCond[k]=Math.max(0, Math.round(v)); }
   else if(k==="qtyPerTrade"){ cr.draftCond._autoQty=false; v=parseFloat(v); if(!isNaN(v)) cr.draftCond[k]=Math.max(0, Math.round(v)); }
   else if(COND_FIELDS.find(f=>f.k===k && f.p)){ v=parseFloat(v)/100; if(!isNaN(v)) cr.draftCond[k]=v; }
   else { v=parseFloat(v); if(!isNaN(v)) cr.draftCond[k]=v; }
-  /* 方案②：间距/基准价/资金/底仓 变化 → 格数按市场低点重定、每笔数量按资金反推 */
-  if(k==="spacingPct" || k==="basePrice" || k==="initCapital" || k==="targetBaseCost") onQtyChanged(cr.draftCond, (cr.market? cr.market.kline : null), cr.market);
+  /* 基准价/计划投资额变化 → 按评价规则重算（手动字段不动） */
+  if(k==="basePrice" || k==="initCapital") onQtyChanged(cr.draftCond, (cr.market? cr.market.kline : null), cr.market);
   recalcDerived(cr.draftCond, cr.market? cr.market.kline : null);
   syncAutoFields(cr.draftCond);
   syncPosInputs(cr.draftCond);
@@ -5288,7 +5804,10 @@ function newFetch(e){
     const rec=recommend(m, price);
     state.creating.name=m.name; state.creating.price=price;
     state.creating.market=m; state.creating.recommend=rec;
-    state.creating.draftCond=Object.assign({}, rec, {currentPrice:round(price,3)});
+    state.creating.draftCond=Object.assign({}, rec, {currentPrice:round(price,3), basePrice:round(price,3)});
+    /* 基准价统一用当前价；间距/格数/每笔/底仓先给占位，等用户填入「计划投资额」后按评价规则自动重算 */
+    state.creating.draftCond._autoSp=true; state.creating.draftCond._autoGrids=true;
+    state.creating.draftCond._autoQty=true; state.creating.draftCond._autoBase=true;
     blankCondMoney(state.creating.draftCond);   // 新增条件单不预填初始资金/每笔数量
     state.creating.step="review";
     save(); render();
@@ -5298,6 +5817,8 @@ function newFetch(e){
     state.creating.name=code; state.creating.price=null;
     state.creating.market=null; state.creating.recommend=rec;
     state.creating.draftCond=Object.assign({}, rec);
+    state.creating.draftCond._autoSp=true; state.creating.draftCond._autoGrids=true;
+    state.creating.draftCond._autoQty=true; state.creating.draftCond._autoBase=true;
     blankCondMoney(state.creating.draftCond);   // 新增条件单不预填初始资金/每笔数量
     state.creating.step="review";
     save(); render();
