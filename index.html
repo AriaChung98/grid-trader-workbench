@@ -1818,9 +1818,21 @@ function condCoverHTML(d, kline, market, ownerId){
   } else {
     seg.push(`<span style="color:#B03021">缺行情波动率</span>：请先「刷新行情」，否则只能按占位估算`);
   }
+  let thinNote="";
   if(sp>0 && dn>0){
     const Wcov=1-Math.pow(1-sp,dn);
-    seg.push(`当前 上<b>${up}</b>/下<b>${dn}</b> 格 ⟹ 覆盖 <b>${pct(Wcov,1)}</b> · 下轨 ¥${fmt(base*Math.pow(1-sp,dn),3)} · 上轨 ¥${fmt(base*Math.pow(1+sp,up),3)}`);
+    let extra="";
+    if(dv>0){
+      const sa=dv*Math.sqrt(PARAM_RULE.ANN_DAYS);
+      const pLo=touchProbPct(Wcov, sa);
+      if(pLo!=null){
+        const hot=(pLo>20);
+        extra=` · 一年内<b style="color:${hot?"#B03021":"#2E7D5B"}">跌破下轨概率 ${pLo.toFixed(0)}%</b>`;
+        if(pLo>20) thinNote=`覆盖偏薄：${pct(Wcov,1)} ≈ ${(Wcov/sa).toFixed(2)}σ，约 <b>${pLo.toFixed(0)}%</b> 的年份会跌破下轨。<b>穿透概率只由「覆盖宽度」决定，与格数无关</b>：下轨价位 = 基准价×(1−间距)^格数，而 (1−间距)^格数 ≡ 1−覆盖宽度 是恒定的 —— 格数从 3 加到 20，下轨价位与穿透概率一分不变，变的只是单笔金额与年触发次数。当前覆盖宽度固定取年化波动（钳制 12%~55%），要降低穿透概率只能加宽它。`;
+        else thinNote=`抗跌深度充足：${pct(Wcov,1)} ≈ ${(Wcov/sa).toFixed(2)}σ，跌破下轨概率约 <b>${pLo.toFixed(0)}%</b>。（穿透概率只由覆盖宽度决定，与格数无关）`;
+      }
+    }
+    seg.push(`当前 上<b>${up}</b>/下<b>${dn}</b> 格 ⟹ 覆盖 <b>${pct(Wcov,1)}</b> · 下轨 ¥${fmt(base*Math.pow(1-sp,dn),3)} · 上轨 ¥${fmt(base*Math.pow(1+sp,up),3)}${extra}`);
   }
   if(C>0 && d.qtyPerTrade>0 && dn>0 && sp>0){
     let sumPx=0; for(let k=1;k<=dn;k++) sumPx+=base*Math.pow(1-sp,k);
@@ -1844,10 +1856,12 @@ function condCoverHTML(d, kline, market, ownerId){
   const tags = ownerId? ["spacingPct|间距|_autoSp","upGrids|格数|_autoGrids","qtyPerTrade|每笔|_autoQty","targetBaseCost|底仓|_autoBase"]
     .map(s=>{ const a=s.split("|"); return tag(a[0],a[1],a[2]); }).join(" ") : "";
   const btn = ownerId? ` <button class="btn ghost mini" onclick="applyParamRule('${ownerId}')">按规则重算</button>` : "";
+  const thinLine = thinNote? `<div class="hint" style="margin-top:4px">${thinNote}</div>` : "";
   return `<div class="hint" style="margin-top:6px">
     <div><b>参数依据</b>：${seg.join("；")}。</div>
     ${seg2.length? `<div style="margin-top:3px">${seg2.join("；")}。</div>`:""}
     ${tags? `<div style="margin-top:5px">${tags}${btn}</div>`:""}
+    ${thinLine}
   </div>`;
 }
 /* 草稿定位（详情页编辑 或 新建流程第2步） */
@@ -2975,7 +2989,23 @@ function estGridYield(sig){
   return GRID_GROSS_K*sig*(1-f);
 }
 
-/* 组合风险：输入 [{g, w}]（w 需已归一化到合计 1） */
+/* ===== 穿透轨道的概率（回答"这组参数会不会很容易穿轨"）=====
+   无漂移布朗运动下，一年内价格触及 ±a（对数幅度）的概率 ≈ 2Φ(−a/σ_年化)。
+   注意：这个概率**只由覆盖宽度 W 决定，与格数 N 无关** —— 因为下轨价位 = base×(1−sp)^N，
+   而 (1−sp)^N = 1−W 是固定的。格数只决定把这段距离切成几段（影响单笔金额与触发频率）。 */
+function normCdf(z){
+  const t=1/(1+0.2316419*Math.abs(z));
+  const d=0.3989423*Math.exp(-z*z/2);
+  const q=d*t*(0.3193815+t*(-0.3565638+t*(1.781478+t*(-1.821256+t*1.330274))));
+  return z>0? 1-q : q;
+}
+/* 一年内触及 ±width 的概率（%）；width 为对数幅度（如覆盖 20% → 0.2231） */
+function touchProbPct(width, sigAnn){
+  if(!(width>0) || !(sigAnn>0)) return null;
+  const a=Math.abs(Math.log(Math.max(1e-9, 1-Math.min(0.999, width))));
+  return 2*normCdf(-a/sigAnn)*100;
+}
+/* 组合风险：输入 [{g, w}]（w 已归一化到合计 1） */
 function pfRisk(members){
   const k=(members||[]).length;
   if(!k) return null;
