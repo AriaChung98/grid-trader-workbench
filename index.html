@@ -2700,9 +2700,15 @@ function pfBacktest(pf){
       qty=lotRound(p.qtyPerTrade*scale);
       const prm=Object.assign({}, p, {initCapital:alloc, qtyPerTrade:qty});
       const valP=(p.currentPrice && p.currentPrice>0)? p.currentPrice : path[path.length-1];
-      /* 待建仓且零成交：虚拟按现价预建底仓再跑（预测"若按此方案部署"的收益；不真实建仓） */
-      const needSeed = (!isConfigured(g) && !(g.trades&&g.trades.length) && p.basePrice>0)
-        ? Math.max(100, Math.floor(alloc/2/p.basePrice/100)*100) : 0;
+      /* 期初底仓（统一口径）：模拟是从头重放样本行情、不使用真实成交，若起始持仓为 0，
+         一旦样本全程在买入线之上就会「买不到 → 无库存可卖 → 0 成交 → 利润恒为 0」
+         （价格从高位下跌的样本尤其明显）。故一律预建底仓：优先取条件单规定的底仓数量，
+         缺省按 50% 资金 ÷ 基准价，再按分配资金 scale 缩放。底仓只作可卖库存（不参与 LIFO 配对）。 */
+      const seedRaw = (p.targetBaseCost>0)? p.targetBaseCost : (p.basePrice>0? alloc/2/p.basePrice : 0);
+      let needSeed = (p.basePrice>0 && seedRaw>0)? Math.max(100, Math.floor(seedRaw*scale/100)*100) : 0;
+      /* 安全钳制：必须留下足够现金买入底仓（simulateGrid 内为严格大于判断） */
+      const seedCap = Math.floor((alloc*0.95)/(p.basePrice*(1+(p.feeRate!=null?p.feeRate:0.0001)))/100)*100;
+      if(needSeed>seedCap) needSeed=Math.max(0, seedCap);
       sim=simulateGrid(path, prm, hi, lo, valP, needSeed);
     }
     return {g, w:mv.w[i], alloc, qty, sim, actual:sm, dailyVol:mv.dvol[i], annVol:mv.annv[i]};
@@ -5618,6 +5624,8 @@ function renderPortfolioDetail(pf){
     const alloc=rw? rw.alloc : 0;
     const simProf=rw&&rw.sim? rw.sim.totalProfit : null;
     const simRet= simProf!=null && alloc>0? simProf/alloc : null;
+    /* 样本内一次都没成交（买+卖=0）：此时"回测利润"是空跑结果，需明示原因，避免误读成"这套方案不赚钱" */
+    const simNoTrig = !!(rw && rw.sim && (rw.sim.buys+rw.sim.sells)===0);
     const tags = (m.rec===false? '<span class="mlabel new">新增</span>' : "")
       + (isConfigured(m.g)? '' : '<span class="tag info">建仓阶段</span>')
       + (isStopped(m.g)? '<span class="tag stopped">已停止</span>' : "");
@@ -5630,7 +5638,7 @@ function renderPortfolioDetail(pf){
       + '<div class="sym">'+symNameHTML(m.g.meta.name,15)+tags+'<small>'+m.g.meta.code+' · 今日 '+(todayCnt? '<b style="color:#B03021">'+todayCnt+' 笔</b>' : '0 笔')+' · 共 '+m.g.trades.length+' 笔 · 现价 ¥'+fmt(sm.cur,3)+'</small></div>'
       + '<div class="cond">权重 <b>'+pct(norm[i],1)+'</b> · 分配 <b>¥'+fmt(alloc,0)+'</b><br>'+condTxt+'</div>'
       + '<div class="profit '+pCls+'">'+(simProf==null? "—" : fmt(simProf,2))
-      + '<div style="font-size:11px;color:var(--muted);font-weight:400">回测利润</div>'
+      + '<div style="font-size:11px;color:var(--muted);font-weight:400">回测利润'+(simNoTrig? ' <span style="color:#8A6A1F">· 样本内未触发</span>':'')+'</div>'
       + '<div style="font-size:11px;color:var(--muted);font-weight:400">收益率 '+(simRet==null? "—" : pct(simRet,2))+'</div></div>'
       + '<div class="assets '+signClass(sm.totalProfit)+'">'+fmt(sm.totalProfit,2)
       + '<div style="font-size:11px;color:var(--muted);font-weight:400">实绩利润</div>'
