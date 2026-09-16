@@ -167,6 +167,25 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .ovrow .cond b{color:var(--ink);font-weight:600}
 .ovrow .profit{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
 .ovrow .acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+/* 触发距离轨道（网格清单 / 组合成员行共用，整行通铺） */
+.ovrow .tgcell{grid-column:1/-1;min-width:0}
+.tgbar{position:relative;padding-top:15px;margin-top:2px}
+.tg-track{position:relative;height:10px;border-radius:5px;background:#EDEAE2}
+.tg-zone{position:absolute;top:0;bottom:0}
+.tg-zone.zb{background:linear-gradient(90deg,#D6EBDF,#8FC7A8);border-radius:5px 0 0 5px}
+.tg-zone.zs{background:linear-gradient(90deg,#E9B7AF,#D2766A);border-radius:0 5px 5px 0}
+.tg-tick{position:absolute;top:-3px;bottom:-3px;width:2px;transform:translateX(-1px);border-radius:1px}
+.tg-tick.tb{background:#2E7D5B}
+.tg-tick.ts{background:#B03021}
+.tg-mark{position:absolute;top:-5px;bottom:-5px;width:2px;transform:translateX(-1px);background:var(--ink);border-radius:1px}
+.tg-mark:after{content:"";position:absolute;left:50%;top:50%;width:8px;height:8px;border-radius:50%;background:var(--ink);transform:translate(-50%,-50%);box-shadow:0 0 0 2px #fff}
+.tg-pin{position:absolute;top:-15px;transform:translateX(-50%);font-size:10.5px;font-weight:600;color:var(--ink);white-space:nowrap;font-variant-numeric:tabular-nums;line-height:15px}
+.tg-lbl{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-top:6px;font-size:11px;line-height:1.55;flex-wrap:wrap}
+.tg-lbl .b{color:#2E7D5B;font-weight:500} .tg-lbl .s{color:#B03021;font-weight:500;text-align:right;margin-left:auto}
+.tg-lbl i{font-style:normal;color:var(--muted);font-weight:400}
+.tg-lbl .tg-note{font-size:10.5px;color:#8A6A1F;background:#FBF4E6;border:1px solid #E2C08A;border-radius:8px;padding:0 6px;white-space:nowrap}
+@media(max-width:760px){ .tg-lbl{font-size:10.5px;gap:6px} .tg-pin{font-size:10px} .tgbar{padding-top:14px} }
+
 /* 长标的名：不换行、不覆盖、超出收缩字体 */
 .sym{display:flex;flex-direction:column;gap:3px;min-width:0}
 .sym-name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
@@ -1605,6 +1624,60 @@ function renderNextTrigger(g){
     <div class="it"><div class="k">下次卖出触发价 ↑</div><div class="val up">${sTxt}</div></div>
   </div>
   <div class="hint">${src}。价格较基准再跌一个间距至 ${bTxt} 触发<b style="color:var(--down)">买入（网格）</b>，再涨一个间距至 ${sTxt} 触发<b style="color:var(--up)">卖出（网格）</b>，间距 ${pct(p.spacingPct,2)}。基准价=近一次成交价，故现价一般位于买入线与卖出线之间。</div>`;
+}
+
+/* ===== 触发距离可视化（网格清单 / 组合成员行共用）=====
+   画一段"当前格"的价格轨道：左端 = 下次买入触发价，右端 = 下次卖出触发价，游标 = 现价。
+   左段填充（绿）= 还需下跌多少才买到（越短越近），右段填充（红）= 还需上涨多少才卖出。
+   距离同时按日波动率折算成"约 N 个交易日"（距离 ÷ 日波动），直接回答"还有多久触发"。 */
+function trigViews(g, sm){
+  if(!g || !isConfigured(g)) return null;
+  const c=g.cond && g.cond.params;
+  if(!(c && c.basePrice>0 && c.spacingPct>0 && c.spacingPct<1)) return null;
+  const cur=(sm && sm.cur>0)? sm.cur : (c.currentPrice||0);
+  if(!(cur>0)) return null;
+  const t=nextTriggerLines(c, g.trades, cur);          // 基准价=近一次成交价（与详情页同口径）
+  const buy=t.buyNext, sell=t.sellNext;
+  if(!(buy>0) || !(sell>buy)) return null;
+  const dv=marketDailyVol(c, g.market, (g.market? g.market.kline : g.pricePath));
+  const toBuy=(cur-buy)/cur, toSell=(sell-cur)/cur;    // 正=还需下跌 / 上涨
+  return { base:t.base, buy, sell, cur, dv, toBuy, toSell,
+    dayBuy:(dv>0? Math.max(0,toBuy)/dv : null),
+    daySell:(dv>0? Math.max(0,toSell)/dv : null),
+    overBuy:(cur<=buy+1e-9), overSell:(cur>=sell-1e-9) };
+}
+function triggerBarHTML(g, sm){
+  const v=trigViews(g, sm);
+  if(!v) return "";
+  const lo=Math.min(v.buy, v.cur), hi=Math.max(v.sell, v.cur);
+  const span=hi-lo;
+  const pos=function(x){ return span>0? Math.max(0, Math.min(100, (x-lo)/span*100)) : 50; };
+  const pBuy=pos(v.buy), pCur=pos(v.cur), pSell=pos(v.sell);
+  const gpBuy=Math.max(0, pCur-pBuy), gpSell=Math.max(0, pSell-pCur);
+  const dayTxt=function(d){ return d==null? "" : ("≈"+d.toFixed(1)+" 交易日"); };
+  const stopped=isStopped(g), paused=isPaused(g);
+  const stateTag = stopped? '<span class="tg-note">已停止 · 数值冻结</span>'
+                 : paused? '<span class="tg-note">已暂停 · 不提交委托</span>' : "";
+  const buyLine = v.overBuy
+    ? '买线 ¥'+fmt(v.buy,3)+' <i>已跌破（待录入）</i>'
+    : '买 ¥'+fmt(v.buy,3)+' <i>还需跌 '+pct(Math.max(0,v.toBuy),2)+(dayTxt(v.dayBuy)? ' · '+dayTxt(v.dayBuy):"")+'</i>';
+  const sellLine = v.overSell
+    ? '<i>已涨破（待录入）</i> 卖线 ¥'+fmt(v.sell,3)
+    : '<i>还需涨 '+pct(Math.max(0,v.toSell),2)+(dayTxt(v.daySell)? ' · '+dayTxt(v.daySell):"")+'</i> 卖 ¥'+fmt(v.sell,3);
+  const tip='当前格价格轨道：左端=下次买入触发价（基准价×(1−间距)），右端=下次卖出触发价（基准价×(1+间距)），'
+    +'竖标=现价。基准价 ¥'+fmt(v.base,3)+'（近一次成交价）。'
+    +(v.dv>0? '按日波动 '+pct(v.dv,2)+' 折算：降至买点约 '+ (v.dayBuy!=null? v.dayBuy.toFixed(1):"—") +' 个交易日，升至卖点约 '+(v.daySell!=null? v.daySell.toFixed(1):"—")+' 个交易日（随机游走的平均穿越时间估计，非承诺）。' : '');
+  return '<div class="tgbar" title="'+esc(tip)+'">'
+    + '<div class="tg-track">'
+    +   '<div class="tg-zone zb" style="left:'+pBuy.toFixed(2)+'%;width:'+gpBuy.toFixed(2)+'%"></div>'
+    +   '<div class="tg-zone zs" style="left:'+pCur.toFixed(2)+'%;width:'+gpSell.toFixed(2)+'%"></div>'
+    +   '<span class="tg-tick tb" style="left:'+pBuy.toFixed(2)+'%"></span>'
+    +   '<span class="tg-tick ts" style="left:'+pSell.toFixed(2)+'%"></span>'
+    +   '<span class="tg-mark" style="left:'+pCur.toFixed(2)+'%"></span>'
+    +   '<span class="tg-pin" style="left:'+Math.max(7,Math.min(93,pCur)).toFixed(2)+'%">现价 ¥'+fmt(v.cur,3)+'</span>'
+    + '</div>'
+    + '<div class="tg-lbl"><span class="b">'+buyLine+'</span>'+stateTag+'<span class="s">'+sellLine+'</span></div>'
+    + '</div>';
 }
 
 /* 今日（最近交易日）是否触发网格买卖：以最新基准价为参照，检测最近一根K是否穿越任一网格触发线 */
@@ -4621,6 +4694,7 @@ function renderOverview(){
     const marketVal = holding * sm.cur;
     const cfg=isConfigured(g);
     const todays = g.trades.filter(t=>t.date===todayISO()).length;   // 今日发生交易（含建仓）
+    const barHTML = triggerBarHTML(g, sm);   // 现价 / 下次买点 / 下次卖点 + 距触发还有多久
     /* 已被纳入组合的网格：勾选固定为未勾选且禁用（收益由组合行计入口径控制，避免重复） */
     const selCell = inPf
       ? `<input type="checkbox" disabled title="已纳入资产组合，收益由组合行计入口径控制">`
@@ -4630,8 +4704,7 @@ function renderOverview(){
       <div class="sym">${symNameHTML(g.meta.name,15)}${inPf?` <span class="tag lock" title="已被资产组合纳入，收益由组合行计入口径控制">已纳入组合</span>`:""}${isStopped(g)?` <span class="tag stopped">已停止</span>`:""}${isPaused(g)?` <span class="tag warn">已暂停</span>`:""}${!cfg?` <span class="tag info">建仓阶段</span>`:""}<small>${g.meta.code} · 共 ${g.trades.length} 笔 · 今日发生交易 <b>${todays}</b> 笔${isStopped(g)?` · 冻结于 ${g.stop.date}`:""}${isPaused(g)?` · 暂停中（调底仓）`:""}</small>${currentCellChip(g,sm)}</div>
       <div class="cond">${cfg
         ? `最新基准 <b>¥${fmt(base,3)}</b> · 间距 <b>${pct(c.spacingPct,2)}</b> · 上<b>${c.upGrids}</b>/下<b>${c.downGrids}</b> 格<br>
-        每笔 <b>${fmt(c.qtyPerTrade,0)}</b> · 资金 <b>¥${fmt(c.initCapital,0)}</b> · 区间 ¥${fmt(gl.lower,3)}~${fmt(gl.upper,3)}<br>
-        现价 <b class="${signClass(sm.cur-c.startPrice)}">¥${fmt(sm.cur,3)}</b>`
+        每笔 <b>${fmt(c.qtyPerTrade,0)}</b> · 资金 <b>¥${fmt(c.initCapital,0)}</b> · 区间 ¥${fmt(gl.lower,3)}~${fmt(gl.upper,3)}${barHTML? "" : `<br>现价 <b class="${signClass(sm.cur-c.startPrice)}">¥${fmt(sm.cur,3)}</b>`}`
         : `<b>建仓阶段（尚未建立条件单）</b><br>
         已投入 <b>¥${fmt(sm.cumBuyAmt - sm.cumSellAmt,0)}</b> · 现价 <b class="${signClass(sm.cur-c.startPrice)}">¥${fmt(sm.cur,3)}</b><br>
         建仓 ${g.trades.filter(t=>t.type==="建仓").length} 笔 · 待设网格`}</div>
@@ -4641,13 +4714,9 @@ function renderOverview(){
         <div style="font-size:11px;color:var(--muted);font-weight:400">市值 ¥${fmt(marketVal,0)}</div></div>
       <div class="acts">
         <button class="btn sm" onclick="openGrid('${g.id}')">打开</button>
-        <button class="btn sm ghost" onclick="renameGrid('${g.id}')">重命名</button>
-        ${inPf? `<button class="btn sm ghost" onclick="openPfGrid('${g.id}')">查看所属组合</button>` : ""}
-        ${cfg
-          ? `<button class="btn sm lock" onclick="openGridEdit('${g.id}')">修改条件单</button>`
-          : `<button class="btn sm lock" onclick="editCond('${g.id}')">新建条件单</button>`}
-        <button class="btn sm danger" onclick="delGrid('${g.id}')">删除网格</button>
+        <button class="btn sm danger" onclick="delGrid('${g.id}')">删除</button>
       </div>
+      ${barHTML? `<div class="tgcell">${barHTML}</div>` : ""}
     </div>`;
   };
   function totalAssetsOf(sm){ return sm.totalAssets; }
@@ -5633,6 +5702,7 @@ function renderPortfolioDetail(pf){
       ? "间距 "+pct(p.spacingPct,1)+" · 上"+p.upGrids+"/下"+p.downGrids+" · 每笔 "+fmt(p.qtyPerTrade,0)
       : "尚未建立条件单";
     const pCls = simProf==null? "" : signClass(simProf);
+    const bar = triggerBarHTML(m.g, sm);   // 现价 / 下次买点 / 下次卖点 + 距触发还有多久
     return '<div class="ovrow" style="cursor:pointer" onclick="openPfMember(\''+m.g.id+'\')">'
       + '<div class="sel"></div>'
       + '<div class="sym">'+symNameHTML(m.g.meta.name,15)+tags+'<small>'+m.g.meta.code+' · 今日 '+(todayCnt? '<b style="color:#B03021">'+todayCnt+' 笔</b>' : '0 笔')+' · 共 '+m.g.trades.length+' 笔 · 现价 ¥'+fmt(sm.cur,3)+'</small></div>'
@@ -5644,6 +5714,7 @@ function renderPortfolioDetail(pf){
       + '<div style="font-size:11px;color:var(--muted);font-weight:400">实绩利润</div>'
       + '<div style="font-size:11px;color:var(--muted);font-weight:400">σ年化 '+(m.annVol==null? "—" : pct(m.annVol,1))+'</div></div>'
       + '<div class="acts" style="justify-content:flex-end"><button class="btn sm" onclick="event.stopPropagation();openPfMember(\''+m.g.id+'\')">查看交易</button></div>'
+      + (bar? '<div class="tgcell">'+bar+'</div>' : '')
       + '</div>';
   }).join("");
   const b = bt? bt : {T:Number(pf.totalCapital)||0};
