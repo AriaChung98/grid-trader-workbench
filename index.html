@@ -156,7 +156,7 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 
 /* 总览表 */
 .ov{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:3px;overflow:hidden;margin-top:14px}
-.ovrow{background:var(--surface);padding:13px 16px;display:grid;grid-template-columns:24px 1.5fr 1.9fr 1fr 1fr auto;gap:12px 14px;align-items:center}
+.ovrow{background:var(--surface);padding:13px 16px;display:grid;grid-template-columns:24px 1.6fr 1.6fr minmax(132px,1.2fr) 1fr 1fr 128px;gap:12px 14px;align-items:center}
 .ovrow .assets{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
 .ovrow:hover{background:#FBFAF7}
 .ovrow .sym{font-weight:600;font-size:14px}
@@ -167,24 +167,27 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .ovrow .cond b{color:var(--ink);font-weight:600}
 .ovrow .profit{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
 .ovrow .acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
-/* 触发距离轨道（网格清单 / 组合成员行共用，整行通铺） */
-.ovrow .tgcell{grid-column:1/-1;min-width:0}
-.tgbar{position:relative;padding-top:15px;margin-top:2px}
-.tg-track{position:relative;height:10px;border-radius:5px;background:#EDEAE2}
+/* 触发距离轨道（网格清单 / 组合成员行共用）—— 置于行中部，占一小块，不占整行 */
+.ovrow .tgcell{min-width:0;align-self:center}
+.tgbar{min-width:0}
+.tg-track{position:relative;height:14px;border-radius:7px;background:#EDEAE2}
 .tg-zone{position:absolute;top:0;bottom:0}
-.tg-zone.zb{background:linear-gradient(90deg,#D6EBDF,#8FC7A8);border-radius:5px 0 0 5px}
-.tg-zone.zs{background:linear-gradient(90deg,#E9B7AF,#D2766A);border-radius:0 5px 5px 0}
-.tg-tick{position:absolute;top:-3px;bottom:-3px;width:2px;transform:translateX(-1px);border-radius:1px}
+.tg-zone.zb{background:#BFE0C8;border-radius:7px 0 0 7px}
+.tg-zone.zs{background:#E9B7AF;border-radius:0 7px 7px 0}
+.tg-tick{position:absolute;top:-2px;bottom:-2px;width:2px;transform:translateX(-1px);border-radius:1px}
 .tg-tick.tb{background:#2E7D5B}
 .tg-tick.ts{background:#B03021}
-.tg-mark{position:absolute;top:-5px;bottom:-5px;width:2px;transform:translateX(-1px);background:var(--ink);border-radius:1px}
-.tg-mark:after{content:"";position:absolute;left:50%;top:50%;width:8px;height:8px;border-radius:50%;background:var(--ink);transform:translate(-50%,-50%);box-shadow:0 0 0 2px #fff}
-.tg-pin{position:absolute;top:-15px;transform:translateX(-50%);font-size:10.5px;font-weight:600;color:var(--ink);white-space:nowrap;font-variant-numeric:tabular-nums;line-height:15px}
-.tg-lbl{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-top:6px;font-size:11px;line-height:1.55;flex-wrap:wrap}
-.tg-lbl .b{color:#2E7D5B;font-weight:500} .tg-lbl .s{color:#B03021;font-weight:500;text-align:right;margin-left:auto}
-.tg-lbl i{font-style:normal;color:var(--muted);font-weight:400}
-.tg-lbl .tg-note{font-size:10.5px;color:#8A6A1F;background:#FBF4E6;border:1px solid #E2C08A;border-radius:8px;padding:0 6px;white-space:nowrap}
-@media(max-width:760px){ .tg-lbl{font-size:10.5px;gap:6px} .tg-pin{font-size:10px} .tgbar{padding-top:14px} }
+.tg-mark{position:absolute;top:-3px;bottom:-3px;width:2px;transform:translateX(-1px);background:#2C2C2A;border-radius:1px}
+.tg-pin{position:absolute;top:50%;transform:translate(-50%,-50%);background:#2C2C2A;color:#fff;font-size:9.5px;font-weight:600;border-radius:8px;padding:0 5px;line-height:14px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.tg-px,.tg-ds{display:flex;justify-content:space-between;align-items:baseline;gap:4px;flex-wrap:wrap;font-variant-numeric:tabular-nums}
+.tg-px{margin-top:5px;font-size:10.5px;line-height:1.4}
+.tg-px .b{color:#2E7D5B;font-weight:500;white-space:nowrap}
+.tg-px .s{color:#B03021;font-weight:500;margin-left:auto;white-space:nowrap}
+.tg-ds{font-size:10px;line-height:1.4;color:#8A8778}
+.tg-ds .b,.tg-ds .s{white-space:nowrap}
+.tg-ds .s{margin-left:auto}
+.tg-note{font-size:9.5px;color:#8A6A1F;background:#FBF4E6;border:1px solid #E2C08A;border-radius:8px;padding:0 5px;white-space:nowrap}
+@media(max-width:860px){ .ovrow .tgcell{grid-column:2/4} }
 
 /* 长标的名：不换行、不覆盖、超出收缩字体 */
 .sym{display:flex;flex-direction:column;gap:3px;min-width:0}
@@ -1654,19 +1657,15 @@ function triggerBarHTML(g, sm){
   const pos=function(x){ return span>0? Math.max(0, Math.min(100, (x-lo)/span*100)) : 50; };
   const pBuy=pos(v.buy), pCur=pos(v.cur), pSell=pos(v.sell);
   const gpBuy=Math.max(0, pCur-pBuy), gpSell=Math.max(0, pSell-pCur);
-  const dayTxt=function(d){ return d==null? "" : ("≈"+d.toFixed(1)+" 交易日"); };
+  const day=function(d){ return (d==null? "" : "·"+d.toFixed(1)+"日"); };
   const stopped=isStopped(g), paused=isPaused(g);
-  const stateTag = stopped? '<span class="tg-note">已停止 · 数值冻结</span>'
-                 : paused? '<span class="tg-note">已暂停 · 不提交委托</span>' : "";
-  const buyLine = v.overBuy
-    ? '买线 ¥'+fmt(v.buy,3)+' <i>已跌破（待录入）</i>'
-    : '买 ¥'+fmt(v.buy,3)+' <i>还需跌 '+pct(Math.max(0,v.toBuy),2)+(dayTxt(v.dayBuy)? ' · '+dayTxt(v.dayBuy):"")+'</i>';
-  const sellLine = v.overSell
-    ? '<i>已涨破（待录入）</i> 卖线 ¥'+fmt(v.sell,3)
-    : '<i>还需涨 '+pct(Math.max(0,v.toSell),2)+(dayTxt(v.daySell)? ' · '+dayTxt(v.daySell):"")+'</i> 卖 ¥'+fmt(v.sell,3);
-  const tip='当前格价格轨道：左端=下次买入触发价（基准价×(1−间距)），右端=下次卖出触发价（基准价×(1+间距)），'
-    +'竖标=现价。基准价 ¥'+fmt(v.base,3)+'（近一次成交价）。'
-    +(v.dv>0? '按日波动 '+pct(v.dv,2)+' 折算：降至买点约 '+ (v.dayBuy!=null? v.dayBuy.toFixed(1):"—") +' 个交易日，升至卖点约 '+(v.daySell!=null? v.daySell.toFixed(1):"—")+' 个交易日（随机游走的平均穿越时间估计，非承诺）。' : '');
+  const note = stopped? '<span class="tg-note">已停止·冻结</span>'
+             : paused? '<span class="tg-note">已暂停</span>' : "";
+  const dBuy  = v.overBuy? '已跌破' : ('−'+pct(Math.max(0,v.toBuy),2)+day(v.dayBuy));
+  const dSell = v.overSell? '已涨破' : ('+'+pct(Math.max(0,v.toSell),2)+day(v.daySell));
+  const tip='当前格价格轨道：左端=下次买入触发价（基准价×(1−间距)），右端=下次卖出触发价（基准价×(1+间距)），竖标/黑标=现价。'
+    +'基准价 ¥'+fmt(v.base,3)+'（近一次成交价）。'
+    +(v.dv>0? '按日波动 '+pct(v.dv,2)+' 折算：降至买点约 '+(v.dayBuy!=null? v.dayBuy.toFixed(1):"—")+' 个交易日，升至卖点约 '+(v.daySell!=null? v.daySell.toFixed(1):"—")+' 个交易日（随机游走的平均穿越时间估计，非承诺）。' : '');
   return '<div class="tgbar" title="'+esc(tip)+'">'
     + '<div class="tg-track">'
     +   '<div class="tg-zone zb" style="left:'+pBuy.toFixed(2)+'%;width:'+gpBuy.toFixed(2)+'%"></div>'
@@ -1674,9 +1673,10 @@ function triggerBarHTML(g, sm){
     +   '<span class="tg-tick tb" style="left:'+pBuy.toFixed(2)+'%"></span>'
     +   '<span class="tg-tick ts" style="left:'+pSell.toFixed(2)+'%"></span>'
     +   '<span class="tg-mark" style="left:'+pCur.toFixed(2)+'%"></span>'
-    +   '<span class="tg-pin" style="left:'+Math.max(7,Math.min(93,pCur)).toFixed(2)+'%">现价 ¥'+fmt(v.cur,3)+'</span>'
+    +   '<span class="tg-pin" style="left:'+Math.max(16,Math.min(84,pCur)).toFixed(2)+'%">'+fmt(v.cur,3)+'</span>'
     + '</div>'
-    + '<div class="tg-lbl"><span class="b">'+buyLine+'</span>'+stateTag+'<span class="s">'+sellLine+'</span></div>'
+    + '<div class="tg-px"><span class="b">买 '+fmt(v.buy,3)+'</span><span class="s">卖 '+fmt(v.sell,3)+'</span></div>'
+    + '<div class="tg-ds"><span class="b">'+dBuy+'</span>'+note+'<span class="s">'+dSell+'</span></div>'
     + '</div>';
 }
 
@@ -4708,6 +4708,7 @@ function renderOverview(){
         : `<b>建仓阶段（尚未建立条件单）</b><br>
         已投入 <b>¥${fmt(sm.cumBuyAmt - sm.cumSellAmt,0)}</b> · 现价 <b class="${signClass(sm.cur-c.startPrice)}">¥${fmt(sm.cur,3)}</b><br>
         建仓 ${g.trades.filter(t=>t.type==="建仓").length} 笔 · 待设网格`}</div>
+      <div class="tgcell">${barHTML}</div>
       <div class="profit ${signClass(sm.totalProfit)}">${fmt(sm.totalProfit,2)}<div style="font-size:11px;color:var(--muted);font-weight:400">真实利润</div>
         <div style="font-size:11px;color:var(--muted);font-weight:400">持仓 ${fmt(holding,0)} 股</div></div>
       <div class="assets ${signClass(sm.totalProfit)}">${fmt(totalAssetsOf(sm),2)}<div style="font-size:11px;color:var(--muted);font-weight:400">总资产</div>
@@ -4716,7 +4717,6 @@ function renderOverview(){
         <button class="btn sm" onclick="openGrid('${g.id}')">打开</button>
         <button class="btn sm danger" onclick="delGrid('${g.id}')">删除</button>
       </div>
-      ${barHTML? `<div class="tgcell">${barHTML}</div>` : ""}
     </div>`;
   };
   function totalAssetsOf(sm){ return sm.totalAssets; }
@@ -4745,11 +4745,11 @@ function renderOverview(){
       <div class="sel"><input type="checkbox" ${pf._include!==false?'checked':''} onchange="togglePfInclude('${pf.id}')" title="勾选后计入收益总览"></div>
       <div class="sym">${pf.name} <span class="mlabel lk">组合 · ${n} 标的</span> ${modeTag}<small>${pf.createdAt||""} · 计划投入 ¥${fmt(T,0)} · 今日发生交易 <b>${pfTodays}</b> 笔</small></div>
       <div class="cond">${members.length? `${memTxt}${members.length>3?` 等 ${members.length} 个`:""} · `:""}计划投入 <b>¥${fmt(T,0)}</b></div>
+      <div class="tgcell"></div>
       <div class="profit ${signClass(prof)}">${fmt(prof,2)}${sub(profLbl,"收益率 "+pct(ret,2))}</div>
       <div class="assets ${signClass(asst-T)}" title="${ready? '实时总资产（真实口径：各成员已建仓成交的市值+现金，详见组合详情「资产构成」）¥'+fmt(asst,0) : '回测期末资产(模拟)=按计划投入分摊、样本内重跑网格的期末估值；真实资产见组合详情「实时总资产 · 真实」¥'+(bt?fmt(bt.actAssets,0):'—')}">${fmt(asst,2)}${sub(asstLbl,"计划投入 ¥"+fmt(T,0))}</div>
       <div class="acts">
         <button class="btn sm" onclick="openPf('${pf.id}')">详情</button>
-        <button class="btn sm ghost" onclick="editPortfolio('${pf.id}')">编辑</button>
         <button class="btn sm danger" onclick="delPortfolio('${pf.id}')">删除</button>
       </div>
     </div>`;
@@ -5707,6 +5707,7 @@ function renderPortfolioDetail(pf){
       + '<div class="sel"></div>'
       + '<div class="sym">'+symNameHTML(m.g.meta.name,15)+tags+'<small>'+m.g.meta.code+' · 今日 '+(todayCnt? '<b style="color:#B03021">'+todayCnt+' 笔</b>' : '0 笔')+' · 共 '+m.g.trades.length+' 笔 · 现价 ¥'+fmt(sm.cur,3)+'</small></div>'
       + '<div class="cond">权重 <b>'+pct(norm[i],1)+'</b> · 分配 <b>¥'+fmt(alloc,0)+'</b><br>'+condTxt+'</div>'
+      + '<div class="tgcell">'+bar+'</div>'
       + '<div class="profit '+pCls+'">'+(simProf==null? "—" : fmt(simProf,2))
       + '<div style="font-size:11px;color:var(--muted);font-weight:400">回测利润'+(simNoTrig? ' <span style="color:#8A6A1F">· 样本内未触发</span>':'')+'</div>'
       + '<div style="font-size:11px;color:var(--muted);font-weight:400">收益率 '+(simRet==null? "—" : pct(simRet,2))+'</div></div>'
@@ -5714,7 +5715,6 @@ function renderPortfolioDetail(pf){
       + '<div style="font-size:11px;color:var(--muted);font-weight:400">实绩利润</div>'
       + '<div style="font-size:11px;color:var(--muted);font-weight:400">σ年化 '+(m.annVol==null? "—" : pct(m.annVol,1))+'</div></div>'
       + '<div class="acts" style="justify-content:flex-end"><button class="btn sm" onclick="event.stopPropagation();openPfMember(\''+m.g.id+'\')">查看交易</button></div>'
-      + (bar? '<div class="tgcell">'+bar+'</div>' : '')
       + '</div>';
   }).join("");
   const b = bt? bt : {T:Number(pf.totalCapital)||0};
