@@ -5713,7 +5713,7 @@ function renderPortfolioDetail(pf){
       + '<div style="font-size:11px;color:var(--muted);font-weight:400">收益率 '+(simRet==null? "—" : pct(simRet,2))+'</div></div>'
       + '<div class="assets '+signClass(sm.totalProfit)+'">'+fmt(sm.totalProfit,2)
       + '<div style="font-size:11px;color:var(--muted);font-weight:400">实绩利润</div>'
-      + '<div style="font-size:11px;color:var(--muted);font-weight:400">σ年化 '+(m.annVol==null? "—" : pct(m.annVol,1))+'</div></div>'
+      + '<div style="font-size:11px;color:var(--muted);font-weight:400">实际收益率 '+(sm.committedCapital>0? pct(sm.gridReturn,2):"—")+'</div></div>'
       + '<div class="acts" style="justify-content:flex-end"><button class="btn sm" onclick="event.stopPropagation();openPfMember(\''+m.g.id+'\')">查看交易</button></div>'
       + '</div>';
   }).join("");
