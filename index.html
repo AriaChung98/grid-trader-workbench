@@ -4593,9 +4593,14 @@ function renderOverview(){
   const pfProf = x => pfReady(x)? (x.bt? x.bt.actProfit : 0) : (x.bt? x.bt.totalProfit : 0);
   const pfAsst = x => pfReady(x)? (x.bt? x.bt.actAssets : 0) : (x.bt? x.bt.totalAssets : 0);
   const pfInit = x => x.pf.totalCapital>0? x.pf.totalCapital : (x.bt? x.bt.actInvest : 0);
-  const pfVG   = x => (x.bt && x.bt.simCount>0)? x.bt.vGrid : 0;
+  /* 「落袋」必须用**实际成交**口径：actGrid = Σ各成员 computeBacktest().Vcum（LIFO 配对、含费）。
+     不能用 pfBacktest 的 vGrid —— 那是"回放样本"的模拟落袋：条件单参数齐全但尚未建仓的组合
+     也会被算出一笔虚拟落袋，导致总览把"回测预测"当成"已到手的钱"。未建仓 → 实际落袋自然为 0。 */
+  const pfVG   = x => (x.bt && x.bt.actGrid!=null)? x.bt.actGrid : 0;
   const totalProfit = gSel.reduce((a,x)=>a+x.sm.totalProfit,0) + pfSel.reduce((a,x)=>a+pfProf(x),0);
-  const totalGrid   = gSel.reduce((a,x)=>a+x.sm.Vcum,0) + pfSel.reduce((a,x)=>a+pfVG(x),0);
+  const gVGsum      = gSel.reduce((a,x)=>a+x.sm.Vcum,0);     // 未纳入组合的网格：实际累计网格收益
+  const pfVGsum     = pfSel.reduce((a,x)=>a+pfVG(x),0);      // 组合：各成员实际累计网格收益之和
+  const totalGrid   = gVGsum + pfVGsum;
   const totalInit   = gSel.reduce((a,x)=>a+x.sm.committedCapital,0) + pfSel.reduce((a,x)=>a+pfInit(x),0);
   const totalAssets = gSel.reduce((a,x)=>a+x.sm.totalAssets,0) + pfSel.reduce((a,x)=>a+pfAsst(x),0);
   const selCount = gSel.length+pfSel.length, totalCount = all.length+pfArr.length;
@@ -4678,11 +4683,11 @@ function renderOverview(){
   return `
   ${band}
   <section class="section">
-    <div class="lab"><span class="t">收益总览</span><span>已勾选 网格+组合 合计 · 组合按其回测利润计入</span></div>
+    <div class="lab"><span class="t">收益总览</span><span>已勾选 网格+组合 合计 · 落袋按实际成交计 · 利润：组合已建仓按实际、未全建按回测</span></div>
     <div class="kpis">
       <div class="kpi"><div class="v ${signClass(totalProfit)}">${fmt(totalProfit,2)}</div><div class="l">总体利润合计</div><div class="s">网格真实 + 组合回测</div></div>
       <div class="kpi"><div class="v">${selCount}</div><div class="l">参与项数</div><div class="s">已选 ${selCount} / 共 ${totalCount}${hiddenCount?` · ${hiddenCount} 个已纳入组合不计入`:""}</div></div>
-      <div class="kpi"><div class="v ${signClass(totalGrid)}">${fmt(totalGrid,2)}</div><div class="l">落袋收益合计</div><div class="s">网格 Vcum + 组合落袋</div></div>
+      <div class="kpi"><div class="v ${signClass(totalGrid)}">${fmt(totalGrid,2)}</div><div class="l">落袋收益合计</div><div class="s" title="口径=实际已实现：网格取 Vcum，组合取各成员真实成交的 Vcum 之和（LIFO 配对、含手续费）。不含回测/模拟预测，未建仓的成员为 0。">网格 ¥${fmt(gVGsum,2)} + 组合 ¥${fmt(pfVGsum,2)}</div></div>
       <div class="kpi"><div class="v">${fmt(totalInit,0)}</div><div class="l">投入资金合计</div></div>
       <div class="kpi"><div class="v ${signClass(totalAssets-totalInit)}">${fmt(totalAssets,2)}</div><div class="l">总资产合计</div><div class="s">${signClass(totalAssets-totalInit)==="up"?"高于投入(红)":(signClass(totalAssets-totalInit)==="down"?"低于投入(绿)":"持平")}</div></div>
     </div>
