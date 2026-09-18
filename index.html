@@ -1739,6 +1739,25 @@ function lastDealBefore(trades, dateISO, basePrice){
   const prior=(trades||[]).filter(t=> (t.type==="买入"||t.type==="卖出") && t.date<dateISO);
   return lastDealPrice(prior, basePrice);
 }
+/* 成交驱动基准价（一致性净化版）：从条件单基准价出发，按录入顺序重放该日之前的成交，
+   仅采信"与网格线自洽"的成交（买入≈上一基准×(1−sp)、卖出≈上一基准×(1+sp)，容差 0.5 格），
+   对无法自洽的成交"忽略不采信"（多由历史脏数据造成），从而避免由被污染的历史成交
+   派生出"卖出价低于基准价"这类不可能触发价。正常数据下与 lastDealBefore 等价。 */
+function dealBaseBefore(trades, dateISO, basePrice, sp){
+  const b0=+basePrice;
+  if(!(b0>0) || !(+sp>0)) return lastDealBefore(trades, dateISO, b0);
+  const tol=0.5*(+sp);
+  let base=b0, seen=false;
+  (trades||[]).forEach(t=>{
+    if(!t || !t.date || t.date>=dateISO) return;
+    const trg=+t.trigger; if(!(trg>0)) return;
+    if(t.type==="建仓"){ base=trg; seen=true; return; }
+    if(t.type!=="买入" && t.type!=="卖出") return;
+    const exp = (t.type==="买入") ? base*(1-sp) : base*(1+sp);
+    if(Math.abs(trg-exp) <= tol*base){ base=trg; seen=true; }   // 仅采信自洽成交；不自洽者忽略（基准不动）
+  });
+  return seen ? base : lastDealBefore(trades, dateISO, b0);
+}
 
 /* 成交驱动（deal-driven）网格：基准价 = 近一次成交价（无成交则用初始基准价）。
    下次买入 = 基准价×(1−间距)，下次卖出 = 基准价×(1+间距)；
@@ -7032,8 +7051,9 @@ function autoGridMonitor(){
           const loBound = base0*Math.pow(1-sp, dgN>0?dgN:1);
           const hiBound = base0*Math.pow(1+sp, ugN>0?ugN:1);
           const saneLo  = base0*0.5, saneHi = base0*1.5;   // 价格合理性护栏（与分时毛刺剔除一致）
-          // 成交驱动基准：该交易日之前（含更早）的"最后一笔"成交价；无则初始基准价
-          let base = lastDealBefore(g.trades, theDate, base0);
+          // 成交驱动基准：该交易日之前（含更早）"最后一笔自洽成交"价；无则初始基准价。
+          // 用一致性净化版 dealBaseBefore，避免历史脏成交把基准带偏、派生出不可能的触发价
+          let base = dealBaseBefore(g.trades, theDate, base0, sp);
           const r3=v=>Math.round(v*1000)/1000;
           const EPS=1e-9;
           const seq=[];
