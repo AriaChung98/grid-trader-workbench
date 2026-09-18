@@ -1152,6 +1152,42 @@ function cloudPushManual(){
     }
   });
 }
+/* 上传目前数据至云端：以本机当前数据为准，强制覆盖云端（绕过 push 端保护），
+   使「云端最新数据 = 本机现状」。用于本机已整理好、要一键把其他设备同步成本机时。
+   与 cloudPushManual 的区别：带确认弹窗，并明确提示“以本机为准覆盖云端”。 */
+function cloudPushCurrent(){
+  if(!cloudCfg()){ toast("未启用云端同步，请先到「设置 · 云端同步」启用"); return; }
+  if(state._pristine){ toast("当前为示例数据，无需上传"); return; }
+  const gN=(state.grids||[]).length, pN=(state.portfolios||[]).length;
+  const tN=(state.grids||[]).reduce((s,g)=>s+((g.trades&&g.trades.length)||0),0);
+  const m=$("modal");
+  $("mTitle").textContent = "上传目前数据至云端？";
+  $("mBody").innerHTML = `
+    <div>
+      <div>将把<b>本机目前的数据</b>强制覆盖到云端，使云端最新数据以此为准：</div>
+      <div style="margin:12px 0;padding:10px 12px;background:var(--band);border:1px solid var(--bandline);border-radius:3px;font-size:13px;line-height:1.9">
+        <b>${gN}</b> 个网格 · <b>${pN}</b> 个资产组合 · <b>${tN}</b> 笔交易
+      </div>
+      <div style="font-size:12px;color:var(--muted);line-height:1.7">其他设备下次同步将以此为准。若本机数据其实较旧，请改用「立即拉取云端」。</div>
+    </div>`;
+  m.classList.add("show");
+  const cleanup=()=>{ m.classList.remove("show"); $("mOk").classList.remove("danger"); $("mOk").textContent="确认"; };
+  $("mOk").classList.remove("danger"); $("mOk").textContent="确认上传";
+  $("mOk").onclick=()=>{
+    cleanup();
+    toast("正在上传本机数据至云端…");
+    cloudPush(true, true).then(ok=>{
+      if(ok){
+        const cc=cloudCfg(); if(cc){ cc.lastSync=new Date().toISOString().slice(0,19).replace("T"," "); setCloudCfg(cc); }
+        render();
+        toast(`已上传目前数据至云端 · ${gN} 个网格 / ${pN} 个组合 / ${tN} 笔交易`);
+      } else {
+        toast("上传失败，请检查网络与云端配置（地址/Key/数据表）");
+      }
+    });
+  };
+  $("mCancel").onclick=cleanup;
+}
 /* ===== 云端快照：每天自动保存一份当日数据（每次保存/打开会补生成；收盘后约 15:30 由定时器强制覆盖为当日最终态），滚动保留最近 60 天，可恢复特定日期 ===== */
 function daysBetween(a,b){ const da=new Date(a+"T00:00:00"), db=new Date(b+"T00:00:00"); return Math.round((db-da)/86400000); }
 function maybeSnapshot(force){
@@ -4829,7 +4865,8 @@ function renderOverview(){
   <section class="section backup-mini">
     <div class="lab"><span class="t">数据备份与恢复</span><span>云端自动同步，一般无需手动操作</span></div>
     <div class="backup-row">
-      <button class="btn sm primary" onclick="restoreLocalBak()">恢复上次备份</button>
+      <button class="btn sm primary" onclick="cloudPushCurrent()">上传目前数据至云端</button>
+      <button class="btn sm ghost" onclick="restoreLocalBak()">恢复上次备份</button>
       <button class="btn sm ghost" onclick="openSettings()">设置 · 云端同步</button>
       <button class="btn sm ghost" onclick="exportJSON()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg><span class="txt">导出 JSON</span></button>
       <button class="btn sm ghost" onclick="document.getElementById('imp').click()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21V9M7 14l5-5 5 5M5 3h14"/></svg><span class="txt">导入恢复</span></button>
@@ -4851,7 +4888,7 @@ function renderCloudPanel(){
       <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap">
         <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="cloud_on" ${c&&c.enabled?"checked":""}> 启用云端同步</label>
         <button class="btn" onclick="saveCloudCfg()">保存并测试连接</button>
-        <button class="btn primary" onclick="cloudPushManual()">立即上传到云端</button>
+        <button class="btn primary" onclick="cloudPushCurrent()">上传目前数据至云端</button>
         <button class="btn ghost" onclick="cloudPullManual()">立即拉取云端</button>
         <span style="color:var(--muted);font-size:12px">${status}</span>
       </div>
