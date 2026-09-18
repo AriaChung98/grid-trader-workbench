@@ -6855,7 +6855,10 @@ function autoGridMonitor(){
              ① 数据日期必须 = 该交易日；② 剔除 close 非正/非有限 的占位K线（防 2026-09-14 几何级数假成交） */
           const dayBars = bars.filter(b=>{
             if(b.d && b.d!==theDate) return false;
-            const c=+b.close; return isFinite(c) && c>0;
+            const c=+b.close; if(!isFinite(c) || c<=0) return false;
+            // 价格毛刺剔除：单标的单日不可能偏离基准 ±50% 以上，剔除 0.02 元这类假价（防几何级数级联）
+            if(c < base0*0.5 || c > base0*1.5) return false;
+            return true;
           });
           if(!dayBars.length) continue;
           const dayLow  = Math.min(...dayBars.map(b=> (isFinite(+b.low) && +b.low>0)? +b.low : +b.close));
@@ -6880,6 +6883,13 @@ function autoGridMonitor(){
           }
           if(theDate===today) path.push({high:cur, low:cur, close:cur, time:nowHM()}); // 仅当天追加“现价”末点
           const MAX_SEQ=200, MAX_ADD=40;      // 单次巡检的硬上限（防任何异常输入造成连锁刷单）
+          const MAX_PER_BAR=3;                // 单根 1 分钟 K 线最多跨越 3 格（正常分钟波动远达不到更多）
+          // 网格定义价格带：基准价×(1±sp)^格数 —— 触发价一旦越出即属“假穿越”，级联必须止步，
+          // 从根上杜绝“基准价被几何级数一路乘下去、生出 0.02 元这类不可能触发价”的脏数据
+          const dgN=Math.max(0, +g.cond.params.downGrids||0), ugN=Math.max(0, +g.cond.params.upGrids||0);
+          const loBound = base0*Math.pow(1-sp, dgN>0?dgN:1);
+          const hiBound = base0*Math.pow(1+sp, ugN>0?ugN:1);
+          const saneLo  = base0*0.5, saneHi = base0*1.5;   // 价格合理性护栏（与分时毛刺剔除一致）
           // 成交驱动基准：该交易日之前（含更早）的"最后一笔"成交价；无则初始基准价
           let base = lastDealBefore(g.trades, theDate, base0);
           const r3=v=>Math.round(v*1000)/1000;
@@ -6888,10 +6898,13 @@ function autoGridMonitor(){
           outer:
           for(const bar of path){
             let guard=0, dir=null;
-            while(guard++ < 60){
+            while(guard++ < MAX_PER_BAR){
               const buyLine=base*(1-sp), sellLine=base*(1+sp);
-              const canBuy  = bar.low <= buyLine+EPS && buyLine >= dayLow-EPS;
-              const canSell = bar.high>= sellLine-EPS && sellLine <= dayHigh+EPS;
+              // 网格带 + 合理性双重钳制：触发价越界即视为假穿越，立即止步，不再级联
+              const buyOk  = buyLine  >= loBound-EPS && buyLine  >= saneLo;
+              const sellOk = sellLine <= hiBound+EPS && sellLine <= saneHi;
+              const canBuy  = buyOk  && bar.low  <= buyLine+EPS  && buyLine  >= dayLow-EPS;
+              const canSell = sellOk && bar.high >= sellLine-EPS && sellLine <= dayHigh+EPS;
               let next=null;
               if(canBuy && canSell) next = (bar.close>=base-EPS)? "卖" : "买";
               else if(canSell) next="卖";
