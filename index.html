@@ -1012,7 +1012,7 @@ function save(){
   catch(e){ alert("保存失败："+e.message); return; }
   cloudPush(true);    // 异步同步到云端，成功/失败均提示
   persistTestGrid();  // 测试网格（含自动录入成交）持久化到本机，避免跨刷新重复录入
-  maybeSnapshot();    // 满足间隔则自动生成当日云端快照（30天滚动）
+  maybeSnapshot();    // 满足间隔则自动生成当日云端快照（每天一份，60天滚动）
 }
 
 /* ============ 云端同步（Supabase 免费版：无需绑卡，长期免费） ============ */
@@ -1083,6 +1083,12 @@ function cloudPull(force){
       const localEmpty = isEmptyState(state);
       /* 保护 A：云端为空、本地有内容 → 绝不拉取覆盖本地（这就是上次全量丢失的路径，必须堵死） */
       if(cloudEmpty && !localEmpty) return false;
+      /* 保护 D：云端组合/网格数量明显少于本地（疑似云端损坏或被旧数据回退）→ 非强制拉取时拒绝覆盖本地，避免好数据被坏云端吃掉（手动"立即拉取"仍可用 force 覆盖） */
+      if(!force && !localEmpty && !localP){
+        const cN=(row.data.portfolios||[]).length, lN=(state.portfolios||[]).length;
+        const cG=(row.data.grids||[]).length, lG=(state.grids||[]).length;
+        if(cN < lN || cG < lG){ console.warn("云端数据量少于本地（组合 "+cN+"/"+lN+"、网格 "+cG+"/"+lG+"），跳过自动拉取以防损坏覆盖"); return false; }
+      }
       /* 保护 B：本地为空、云端有内容 → 忽略时间戳，强制拉取，实现"误清空后自动自愈" */
       const selfHeal = localEmpty && !cloudEmpty && !localP;
       if(!selfHeal){
@@ -1118,14 +1124,14 @@ function cloudPushManual(){
     }
   });
 }
-/* ===== 云端快照：每 3 天自动保存一份当日数据，滚动保留最近 30 天，可恢复特定日期 ===== */
+/* ===== 云端快照：每天自动保存一份当日数据（每次保存/打开会补生成；收盘后约 15:30 由定时器强制覆盖为当日最终态），滚动保留最近 60 天，可恢复特定日期 ===== */
 function daysBetween(a,b){ const da=new Date(a+"T00:00:00"), db=new Date(b+"T00:00:00"); return Math.round((db-da)/86400000); }
 function maybeSnapshot(force){
   const c=cloudCfg(); if(!c) return;
   if(state._pristine) return;                       // 示例数据不快照
   const today=todayISO();
   const last=state._lastSnapDate;
-  if(!force && last && daysBetween(last, today) < 3) return;   // 不足 3 天不重复生成
+  if(!force && last && daysBetween(last, today) < 1) return;   // 当天已快照则不再重复生成（收盘定时器仍可用 force 强制覆盖）
   pushSnapshot(today).then(ok=>{ if(ok){ state._lastSnapDate=today; saveLocal(); purgeSnapshots(); } });
 }
 /* 写入/覆盖当日快照（snap_date 唯一，每天一份最终态） */
@@ -1138,16 +1144,28 @@ function pushSnapshot(dateStr){
   }).then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return true; })
    .catch(err=>{ console.warn("云端快照失败：",err); return false; });
 }
-/* 删除 30 天前的旧快照（滚动保留） */
+/* 每日收盘后（15:30 起）自动生成当日云端快照，作为每日数据保险；页面需保持打开才会触发 */
+function dailyCloseSnapshot(){
+  try{
+    const c=cloudCfg(); if(!c || state._pristine) return;
+    const now=new Date();
+    if(now.getHours()<15 || (now.getHours()===15 && now.getMinutes()<30)) return;   // 未到收盘后
+    const today=todayISO();
+    if(state._lastSnapCloseDate===today) return;   // 今日收盘快照已生成，避免重复触发
+    maybeSnapshot(true);                            // 强制生成/覆盖当日快照（收盘最终态）
+    state._lastSnapCloseDate=today; saveLocal();
+  }catch(e){ console.warn("每日收盘快照失败：", e); }
+}
+/* 删除 60 天前的旧快照（滚动保留，延长至 60 天以便更长回溯） */
 function purgeSnapshots(){
   const c=cloudCfg(); if(!c) return Promise.resolve(false);
-  const cutoff=new Date(Date.now()-30*86400000).toISOString();
+  const cutoff=new Date(Date.now()-60*86400000).toISOString();
   return fetch(`${c.url}/rest/v1/gridtrader_snapshots?created_at=lt.${encodeURIComponent(cutoff)}`, {
     method:"DELETE", headers:cloudHeaders()
   }).then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return true; })
    .catch(err=>{ console.warn("快照清理失败：",err); return false; });
 }
-/* 恢复：列出最近 30 天可恢复日期，渲染到设置面板的 #snapBox */
+/* 恢复：列出最近 60 天可恢复日期，渲染到设置面板的 #snapBox */
 function listSnapshots(){
   const c=cloudCfg(); if(!c){ toast("未启用云端同步"); return; }
   toast("正在加载可恢复日期…");
@@ -1155,7 +1173,7 @@ function listSnapshots(){
     .then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
     .then(rows=>{
       const box=document.getElementById("snapBox");
-      if(!rows || !rows.length){ if(box) box.innerHTML="<span class='dim'>最近 30 天无可用快照</span>"; toast("最近 30 天无可用快照"); return; }
+      if(!rows || !rows.length){ if(box) box.innerHTML="<span class='dim'>最近 60 天无可用快照</span>"; toast("最近 60 天无可用快照"); return; }
       if(box) box.innerHTML = rows.map(r=>`<button class="btn ghost" style="margin:3px 4px 3px 0" onclick="restoreSnapshot('${r.snap_date}')">${r.snap_date}</button>`).join("");
     }).catch(e=> toast("加载快照失败："+e.message));
 }
@@ -4811,7 +4829,7 @@ function renderCloudPanel(){
       </div>
       <div class="note">已启用云端同步：交易自动上传、多端同步、行情走云端代理。</div>
       <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
-        <div style="font-size:12px;color:var(--muted);margin-bottom:4px">数据备份与恢复（每 3 天自动快照，滚动保留 30 天）</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:4px">数据备份与恢复（每天自动快照，收盘后约 15:30 强制生成当日最终态，滚动保留 60 天）</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button class="btn ghost" onclick="maybeSnapshot(true)">立即生成今日快照</button>
           <button class="btn ghost" onclick="listSnapshots()">恢复特定日期数据</button>
@@ -6919,6 +6937,8 @@ if(state.grids.length>0){
 // 条件单触发自动录入：打开即启动定时巡检（默认开启；可在「今天要处理」中关闭）
 try{ autoGridMonitor(); }catch(e){ console.warn("自动录入巡检初始化失败：", e); }
 try{ setInterval(autoGridMonitor, AUTO_MONITOR_MS); }catch(e){ console.warn("自动录入定时器启动失败：", e); }
+// 每天收盘后（约 15:30）自动生成当日云端快照，作为每日数据保险（页面需保持打开才会触发）
+try{ setInterval(dailyCloseSnapshot, 5*60*1000); }catch(e){ console.warn("收盘快照定时器启动失败：", e); }
 </script>
 </body>
 </html>
