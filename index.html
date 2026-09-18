@@ -6968,6 +6968,88 @@ function toast(msg){
 
 
 /* ============ 条件单触发自动录入（监测当日实盘：盘中触及即录入，成交驱动型移动基准价，可一日多次） ============ */
+/* ===== 巡检冲突提示：巡检若发现「已存成交与网格基准相违背」，弹窗让用户决定保留哪些 ===== */
+/* 扫描各网格已存成交链，返回与基准不自洽的买入/卖出（口径同 dealBaseBefore 的"自洽"判定）。 */
+function tradeConflicts(){
+  const out=[];
+  (state.grids||[]).forEach(g=>{
+    const cp=(g.cond&&g.cond.params)||{}; const b0=+cp.basePrice||0, sp=+cp.spacingPct||0;
+    if(!(b0>0 && sp>0)) return;
+    let base=b0;
+    (g.trades||[]).forEach((t,idx)=>{
+      if(!t) return;
+      const trg=+(t.trigger||0);
+      if(t.type==="建仓"){ if(trg>0) base=trg; return; }
+      if(t.type!=="买入" && t.type!=="卖出") return;
+      if(!(trg>0)) return;
+      const exp=(t.type==="买入")? base*(1-sp) : base*(1+sp);
+      if(Math.abs(trg-exp) > 0.5*sp*base){
+        out.push({ gridId:g.id, gridName:(g.meta&&g.meta.name)||"", idx, trade:t,
+                   base:Math.round(base*1000)/1000, exp:Math.round(exp*1000)/1000 });
+      } else base=trg;
+    });
+  });
+  return out;
+}
+let _conflictSig="";          // 已提示过的冲突签名（同一批只提示一次）
+let _syncSettled=false;       // 首轮云端同步完成前不提示，避免拿旧本机数据打扰
+function maybeWarnTradeConflicts(){
+  if(!_syncSettled) return;
+  if(state._autoMonitor===false) return;   // 自动录入关闭时不提示
+  /* 已有弹窗在显示则不打扰，等下一轮巡检 */
+  if($("modal").classList.contains("show") || $("modalR").classList.contains("show") ||
+     $("modalStop").classList.contains("show") || $("modalEditTrade").classList.contains("show")) return;
+  const cs=tradeConflicts();
+  if(!cs.length){ _conflictSig=""; return; }
+  const sig=cs.map(c=>c.gridId+"#"+c.idx).join("|");
+  if(sig===_conflictSig) return;
+  _conflictSig=sig;
+  showConflictModal(cs);
+}
+function showConflictModal(cs){
+  const m=$("modal");
+  $("mTitle").textContent = "巡检提示 · 发现与网格基准不符的成交";
+  const rows=cs.map((c,i)=>{
+    const t=c.trade; const lbl=(t.type==="买入")?"买入线":"卖出线";
+    return `<label style="display:flex;gap:9px;align-items:flex-start;margin:9px 0;font-size:13px;line-height:1.6">
+      <input type="checkbox" data-ci="${i}" checked style="width:16px;height:16px;min-height:0;margin-top:2px;flex:0 0 auto">
+      <span><b>${esc(c.gridName)}</b>　${esc(t.date)} ${esc(t.type)}${t.qty? " "+t.qty+"股":""}　触发价 ${t.trigger}
+        <span style="display:block;font-size:12px;color:var(--muted)">该笔与前序基准 ${c.base} 不符：${lbl}应 ≈ <b>${c.exp}</b></span></span>
+    </label>`;
+  }).join("");
+  $("mBody").innerHTML = `
+    <div>巡检发现以下成交与网格基准相违背（疑似历史脏数据或手工误录）。<b>勾选＝保留该笔；取消勾选＝删除该笔。</b></div>
+    <div style="margin:10px 0;max-height:44vh;overflow:auto">${rows}</div>
+    <div style="display:flex;gap:8px;margin-bottom:4px">
+      <button class="btn sm ghost" id="cfKeepAll">全部保留</button>
+      <button class="btn sm danger" id="cfDelAll">全部删除</button>
+    </div>`;
+  m.classList.add("show");
+  const boxes=()=>Array.from($("mBody").querySelectorAll('input[data-ci]'));
+  $("cfKeepAll").onclick=()=>boxes().forEach(b=>b.checked=true);
+  $("cfDelAll").onclick=()=>boxes().forEach(b=>b.checked=false);
+  $("mOk").classList.remove("danger"); $("mOk").textContent="应用选择";
+  $("mOk").onclick=()=>{
+    const delIdx=boxes().filter(b=>!b.checked).map(b=>+b.dataset.ci);
+    m.classList.remove("show"); $("mOk").textContent="确认";
+    if(!delIdx.length){ toast("已保留全部记录"); return; }
+    const byGrid={};
+    delIdx.forEach(i=>{ const c=cs[i]; (byGrid[c.gridId]=byGrid[c.gridId]||[]).push(c.trade); });
+    let n=0;
+    Object.keys(byGrid).forEach(gid=>{
+      const g=getGrid(gid); if(!g) return;
+      const set=new Set(byGrid[gid]);
+      const before=(g.trades||[]).length;
+      g.trades=(g.trades||[]).filter(t=>!set.has(t));
+      n += before-(g.trades||[]).length;
+    });
+    save(); render();
+    _conflictSig = tradeConflicts().map(c=>c.gridId+"#"+c.idx).join("|");   // 记下剩余冲突，避免重复弹
+    toast("已删除 "+n+" 笔与基准不符的记录");
+  };
+  $("mCancel").onclick=()=>{ m.classList.remove("show"); $("mOk").textContent="确认"; toast("已保留全部记录"); };
+}
+
 const AUTO_MONITOR_MS = 60000;   // 每 60 秒巡检一次（仅页面打开时运行）
 const AUTO_LOOKBACK_DAYS = 3;    // 自动巡检追溯窗口：覆盖今天 + 前 3 个自然日（跳过周末），补录漏掉的交易日成交
 /* 生成最近 n 个自然日内的交易日（跳过周六/周日），升序，含今天；用于自动巡检补录历史交易日 */
@@ -6989,6 +7071,7 @@ function tradingDatesLookback(n){
    - 休市日（周末）自动剔除，且历史日不再注入“现价”末点，从根上杜绝“把周五行情记成周六成交”类事故 */
 function autoGridMonitor(){
   if(state._autoMonitor===false) return;          // 默认开启；可在「今天要处理」中关闭
+  try{ maybeWarnTradeConflicts(); }catch(e){}      // 巡检冲突提示：发现与网格基准相违背的成交即弹窗让用户定夺
   const today=todayISO();
   const dates=tradingDatesLookback(AUTO_LOOKBACK_DAYS);   // 升序：[3天前…前天, 昨天, 今天]
   const targets = state.grids.filter(g=> isConfigured(g) && !isStopped(g) && !isPaused(g) && !g._noAuto);
@@ -7152,9 +7235,13 @@ if(cloudCfg()){
     }catch(e){}
     try{ ensureTestGrid(); }catch(e){}
     maybeSnapshot();
+    _syncSettled=true;                                     // 首轮同步完成，允许巡检冲突提示
+    setTimeout(()=>{ try{ maybeWarnTradeConflicts(); }catch(e){} }, 1200);
   });
 } else {
   ensureTestGrid();
+  _syncSettled=true;
+  setTimeout(()=>{ try{ maybeWarnTradeConflicts(); }catch(e){} }, 1200);
 }
 // 每次打开工作台，自动先刷新一波行情（仅取各标的现价，轻量；离线或失败时沿用上次价格）
 if(state.grids.length>0){
