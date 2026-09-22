@@ -350,18 +350,17 @@ input[readonly],input:disabled{background:#F1EEE7;color:#6B675E;cursor:not-allow
 .tr-acts{display:flex;gap:6px;flex:0 0 auto}
 @media (max-width:520px){ .tr-acts{width:100%} .tr-acts .btn{flex:1 1 auto;justify-content:center} }
 .pcls{display:inline-block;font-size:10.5px;font-weight:600;color:#8A6A2F;background:var(--band);border:1px solid var(--bandline);border-radius:2px;padding:0 5px;margin-left:4px;vertical-align:middle;white-space:nowrap}
-/* 资产组合 · 成员资金分配可视化（堆叠条 + 图例） */
-.palloc{margin-top:2px}
-.pa-bar{display:flex;height:10px;border-radius:2px;overflow:hidden;background:var(--line)}
+/* 资产组合 · 成员资金分配可视化（紧凑版：堆叠条 + 逐行图例，置于行「中列」空位，不占整行） */
+.palloc{min-width:0}
+.pa-bar{display:flex;height:9px;border-radius:2px;overflow:hidden;background:var(--line)}
 .pa-bar i{display:block;height:100%;min-width:2px}
-.pa-legend{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:7px;font-size:11.5px;color:var(--muted);align-items:center}
-.pa-lg{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:100%}
-.pa-lg i{width:8px;height:8px;border-radius:2px;display:inline-block;flex:0 0 auto}
-.pa-lg>b{color:var(--ink);font-weight:600}
-.pa-lg>em{font-style:normal}
-.pa-lg.off{opacity:.55}
-.pa-total{margin-left:auto;color:var(--muted)}
-@media (max-width:520px){ .pa-total{margin-left:0;width:100%} }
+.pa-legend{display:flex;flex-direction:column;gap:2px;margin-top:6px;font-size:10.5px;color:var(--muted);line-height:1.35}
+.pa-lg{display:flex;align-items:center;gap:4px;min-width:0}
+.pa-lg i{width:7px;height:7px;border-radius:1px;display:inline-block;flex:0 0 auto}
+.pa-lg>em{font-style:normal;white-space:nowrap}
+.pa-lg>b{color:var(--ink);font-weight:600;white-space:nowrap}
+.pa-lg>u{text-decoration:none;color:var(--muted);white-space:nowrap;margin-left:auto}
+.pa-lg.off{opacity:.5}
 
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
@@ -4871,8 +4870,9 @@ function renderHeader(){
 }
 
 /* ============ 总览 ============ */
-/* ===== 资产组合 · 成员资金分配可视化（堆叠条 + 图例），替代原先的纯文字罗列 ===== */
-const PF_ALLOC_COLORS=["#1A56C4","#C0392B","#9A6B1F","#2E7D32","#6B4E9E","#0E7490","#B45309","#4B5563","#7C2D12","#155E75"];
+/* ===== 资产组合 · 成员资金分配可视化（堆叠条 + 图例，紧凑版），替代原先的纯文字罗列 =====
+   配色取自工作台自身色板（暖纸色调）：金棕/靛蓝/墨绿/砖红 等，与整体 UI 一致 */
+const PF_ALLOC_COLORS=["#9A6B1F","#1A56C4","#2E7D5B","#B23A2E","#8A6A2F","#4A6FA5","#6B6F76","#2F6B4A","#8B2E22","#5A554C"];
 function pfAllocHTML(pf){
   const members=pfMembers(pf);
   if(!members.length) return "";
@@ -4882,13 +4882,13 @@ function pfAllocHTML(pf){
     const w=Math.max(0, Number(ws[i])||0);
     const plan=(Number(m.plan)>0)? Number(m.plan)
              : (T>0? T*w : (Number(m.g.cond&&m.g.cond.params&&m.g.cond.params.initCapital)||0));
-    return {name:m.g.meta.name, code:m.g.meta.code, w, plan, on:(m.on!==false), color:PF_ALLOC_COLORS[i%PF_ALLOC_COLORS.length]};
+    return {name:m.g.meta.name, w, plan, on:(m.on!==false), color:PF_ALLOC_COLORS[i%PF_ALLOC_COLORS.length]};
   });
-  const segs=items.map(it=>`<i style="width:${(it.w*100).toFixed(3)}%;background:${it.color};${it.on?"":"opacity:.45"}" title="${esc(it.name)}　${pct(it.w,1)}　计划 ¥${fmt(it.plan,0)}${it.on?"":"（未启用）"}"></i>`).join("");
-  const legend=items.map(it=>`<span class="pa-lg${it.on?"":" off"}"><i style="background:${it.color}"></i>${symNameHTML(it.name,18)}<b>${pct(it.w,1)}</b><em>¥${fmt(it.plan,0)}</em></span>`).join("");
-  return `<div class="palloc">
+  const segs=items.map(it=>`<i style="width:${(it.w*100).toFixed(3)}%;background:${it.color};${it.on?"":"opacity:.4"}" title="${esc(it.name)}　${pct(it.w,1)}　计划 ¥${fmt(it.plan,0)}${it.on?"":"（未启用）"}"></i>`).join("");
+  const legend=items.map(it=>`<span class="pa-lg${it.on?"":" off"}" title="${esc(it.name)}　${pct(it.w,1)}　计划 ¥${fmt(it.plan,0)}"><i style="background:${it.color}"></i><em>${symNameHTML(it.name,6)}</em><b>${pct(it.w,1)}</b><u>¥${fmt(it.plan,0)}</u></span>`).join("");
+  return `<div class="palloc" title="成员资金分配：各标的占总投入比例 × 计划投入${T>0? '（组合合计 ¥'+fmt(T,0)+'）':''}">
     <div class="pa-bar">${segs}</div>
-    <div class="pa-legend">${legend}${T>0? `<span class="pa-total">计划投入 ¥${fmt(T,0)}</span>`:""}</div>
+    <div class="pa-legend">${legend}</div>
   </div>`;
 }
 
@@ -4979,14 +4979,13 @@ function renderOverview(){
       <div class="sel"><input type="checkbox" ${pf._include!==false?'checked':''} onchange="togglePfInclude('${pf.id}')" title="勾选后计入收益总览"></div>
       <div class="sym">${pf.name} <span class="mlabel lk">组合 · ${n} 标的</span> ${modeTag}<small>${pf.createdAt||""} · 计划投入 ¥${fmt(T,0)} · 今日发生交易 <b>${pfTodays}</b> 笔</small></div>
       <div class="cond">${members.length? `${members.length} 个成员 · `:""}计划投入 <b>¥${fmt(T,0)}</b></div>
-      <div class="tgcell"></div>
+      <div class="tgcell">${allocHTML}</div>
       <div class="profit ${signClass(prof)}">${fmt(prof,2)}${sub(profLbl,"收益率 "+pct(ret,2))}</div>
       <div class="assets ${signClass(asst-T)}" title="${ready? '实时总资产（真实口径：各成员已建仓成交的市值+现金，详见组合详情「资产构成」）¥'+fmt(asst,0) : '回测期末资产(模拟)=按计划投入分摊、样本内重跑网格的期末估值；真实资产见组合详情「实时总资产 · 真实」¥'+(bt?fmt(bt.actAssets,0):'—')}">${fmt(asst,2)}${sub(asstLbl,"计划投入 ¥"+fmt(T,0))}</div>
       <div class="acts">
         <button class="btn sm" onclick="openPf('${pf.id}')">详情</button>
         <button class="btn sm danger" onclick="delPortfolio('${pf.id}')">删除</button>
       </div>
-      ${allocHTML? `<div style="grid-column:1/-1">${allocHTML}</div>` : ""}
     </div>`;
   }).join("");
   const pfEmpty = pfArr.length===0 ? `<div class="empty">还没有资产组合。点上方「新增资产组合」，把已录网格按资金比例组合回测（收益是否计入总览由勾选控制）。</div>` : "";
