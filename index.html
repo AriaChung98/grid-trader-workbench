@@ -349,6 +349,7 @@ input[readonly],input:disabled{background:#F1EEE7;color:#6B675E;cursor:not-allow
 .tr-sub{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.6}
 .tr-acts{display:flex;gap:6px;flex:0 0 auto}
 @media (max-width:520px){ .tr-acts{width:100%} .tr-acts .btn{flex:1 1 auto;justify-content:center} }
+.pcls{display:inline-block;font-size:10.5px;font-weight:600;color:#8A6A2F;background:var(--band);border:1px solid var(--bandline);border-radius:2px;padding:0 5px;margin-left:4px;vertical-align:middle;white-space:nowrap}
 
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
@@ -1554,7 +1555,7 @@ function renderRailRisk(g, sm){
     </div>
     <div class="rr-axis">
       <span>下轨 ¥${fmt(lower,3)}</span>
-      <span class="rr-cur">现价 ¥${fmt(cur,3)}${depthTxt}</span>
+      <span class="rr-cur">现价 ¥${fmt(cur,3)}${priceSrcTag(g)}${depthTxt}</span>
       <span>上轨 ¥${fmt(upper,3)}</span>
     </div>
     <div class="rr-celltxt">当前档位：<b>${cellLabel}</b>${ (cur>lower && cur<upper)? `（¥${fmt(cellLow,3)} ~ ¥${fmt(cellHigh,3)}）` : "" }</div>
@@ -1707,7 +1708,7 @@ function renderHoldRailMerged(g, sm){
     </div>
     <div class="hr-xaxis">
       <span>下轨 ¥${fmt(lower,3)}</span>
-      <span class="hr-curx">现价 ¥${fmt(cur,3)}${depthTxt}</span>
+      <span class="hr-curx">现价 ¥${fmt(cur,3)}${priceSrcTag(g)}${depthTxt}</span>
       <span>上轨 ¥${fmt(upper,3)}</span>
     </div>
     <div class="hr-foot">
@@ -1818,7 +1819,7 @@ function renderNextTrigger(g){
   const sTxt = "¥"+fmt(sellNext,3);
   return `<div class="pline" style="margin-top:14px;background:#F7F5EF">
     <div class="it"><div class="k">网格基准价（成交驱动）</div><div class="val">¥${fmt(base,3)}</div></div>
-    <div class="it"><div class="k">标的现价（实时）</div><div class="val ${signClass((p.currentPrice||0)-base)}">¥${fmt(p.currentPrice,3)}</div></div>
+    <div class="it"><div class="k">标的现价${g._priceFromClose? "（收盘价）":"（实时）"}</div><div class="val ${signClass((p.currentPrice||0)-base)}">¥${fmt(p.currentPrice,3)}${priceSrcTag(g)}</div></div>
     <div class="it"><div class="k">下次买入触发价 ↓</div><div class="val down">${bTxt}</div></div>
     <div class="it"><div class="k">下次卖出触发价 ↑</div><div class="val up">${sTxt}</div></div>
   </div>
@@ -1872,7 +1873,7 @@ function triggerBarHTML(g, sm){
     +   '<span class="tg-pin" style="left:'+Math.max(16,Math.min(84,pCur)).toFixed(2)+'%">'+fmt(v.cur,3)+'</span>'
     + '</div>'
     + '<div class="tg-px"><span class="b">买 '+fmt(v.buy,3)+'</span><span class="s">卖 '+fmt(v.sell,3)+'</span></div>'
-    + '<div class="tg-ds"><span class="b">'+dBuy+'</span>'+note+'<span class="s">'+dSell+'</span></div>'
+    + '<div class="tg-ds"><span class="b">'+dBuy+'</span>'+note+priceSrcTag(g)+'<span class="s">'+dSell+'</span></div>'
     + '</div>';
 }
 
@@ -4903,9 +4904,9 @@ function renderOverview(){
       <div class="sym">${symNameHTML(g.meta.name,15)}${inPf?` <span class="tag lock" title="已被资产组合纳入，收益由组合行计入口径控制">已纳入组合</span>`:""}${isStopped(g)?` <span class="tag stopped">已停止</span>`:""}${isPaused(g)?` <span class="tag warn">已暂停</span>`:""}${!cfg?` <span class="tag info">建仓阶段</span>`:""}<small>${g.meta.code} · 共 ${g.trades.length} 笔 · 今日发生交易 <b>${todays}</b> 笔${isStopped(g)?` · 冻结于 ${g.stop.date}`:""}${isPaused(g)?` · 暂停中（调底仓）`:""}</small>${currentCellChip(g,sm)}</div>
       <div class="cond">${cfg
         ? `最新基准 <b>¥${fmt(base,3)}</b> · 间距 <b>${pct(c.spacingPct,2)}</b> · 上<b>${c.upGrids}</b>/下<b>${c.downGrids}</b> 格<br>
-        每笔 <b>${fmt(c.qtyPerTrade,0)}</b> · 资金 <b>¥${fmt(c.initCapital,0)}</b> · 区间 ¥${fmt(gl.lower,3)}~${fmt(gl.upper,3)}${barHTML? "" : `<br>现价 <b class="${signClass(sm.cur-c.startPrice)}">¥${fmt(sm.cur,3)}</b>`}`
+        每笔 <b>${fmt(c.qtyPerTrade,0)}</b> · 资金 <b>¥${fmt(c.initCapital,0)}</b> · 区间 ¥${fmt(gl.lower,3)}~${fmt(gl.upper,3)}${barHTML? "" : `<br>现价 <b class="${signClass(sm.cur-c.startPrice)}">¥${fmt(sm.cur,3)}</b>${priceSrcTag(g)}`}`
         : `<b>建仓阶段（尚未建立条件单）</b><br>
-        已投入 <b>¥${fmt(sm.cumBuyAmt - sm.cumSellAmt,0)}</b> · 现价 <b class="${signClass(sm.cur-c.startPrice)}">¥${fmt(sm.cur,3)}</b><br>
+        已投入 <b>¥${fmt(sm.cumBuyAmt - sm.cumSellAmt,0)}</b> · 现价 <b class="${signClass(sm.cur-c.startPrice)}">¥${fmt(sm.cur,3)}</b>${priceSrcTag(g)}<br>
         建仓 ${g.trades.filter(t=>t.type==="建仓").length} 笔 · 待设网格`}</div>
       <div class="tgcell">${barHTML}</div>
       <div class="profit ${signClass(sm.totalProfit)}">${fmt(sm.totalProfit,2)}<div style="font-size:11px;color:var(--muted);font-weight:400">真实利润</div>
@@ -6632,6 +6633,72 @@ function fetchEMKline(code,start,end){
       return d.data.klines.map(x=>{ const a=x.split(","); return {date:a[0], open:parseFloat(a[1]), close:parseFloat(a[2]), high:parseFloat(a[3]), low:parseFloat(a[4])}; });
     }).catch(e=>{ if(e&&e.message==="无数据") throw e; throw new Error("网络错误"); });
 }
+/* ===== 现价归一化：未开盘/停牌等情形行情接口可能返回 0 或空 → 回退为最近交易日收盘价，并标记来源 ===== */
+/* 是否 A 股连续交易时段（粗略：交易日 09:15–15:05）。非交易时段显示的就是「最近收盘价」。 */
+function inTradingHours(){
+  const d=new Date(); const dow=d.getDay();
+  if(dow===0||dow===6) return false;
+  const hm=d.getHours()*60+d.getMinutes();
+  return hm>=9*60+15 && hm<=15*60+5;
+}
+function lastKlineDate(g){
+  const k=(g&&g.market&&g.market.kline)||[]; if(k.length) return k[k.length-1].date;
+  const p=(g&&g.pricePath)||[]; return p.length? p[p.length-1].date : null;
+}
+/* 归一化行情对象价格：① 价格为 0/无效 → 取 K 线最后一根收盘价兜底；② 非交易时段 → 标注为收盘价。 */
+function fixMarketPrice(m){
+  if(!m || typeof m!=="object") return m;
+  const k=Array.isArray(m.kline)? m.kline : [];
+  const last=k.length? k[k.length-1] : null;
+  const close= last? +last.close : 0;
+  let p=+m.price;
+  if(!(isFinite(p) && p>0) && isFinite(close) && close>0){ p=close; m.priceFallback=true; }
+  m.price = (isFinite(p)&&p>0)? p : 0;
+  m.priceFromClose = (!!m.priceFallback) || (!inTradingHours() && close>0);
+  if(m.priceFromClose && last && last.date) m.priceDate=last.date;
+  return m;
+}
+/* 在网格上记录「当前价来自收盘价」的标记，供界面明确标注（避免把收盘价当实时价看） */
+function markPriceSrc(g, fromClose, dateISO){
+  if(!g) return;
+  g._priceFromClose = !!fromClose;
+  if(fromClose){ g._priceDate = dateISO || lastKlineDate(g) || null; }
+}
+/* 只有拿到有效价格才覆盖现价；无效时退回该网格已有K线收盘价，仍无效则保留原值（绝不写成 0） */
+function applyLivePrice(g, price, fromClose){
+  const p=+price;
+  let used=null;
+  if(isFinite(p) && p>0) used=p;
+  else { const k=(g.market&&g.market.kline)||[]; if(k.length && +k[k.length-1].close>0) used=+k[k.length-1].close; }
+  if(used==null) return false;
+  g.cond.params.currentPrice=used;
+  markPriceSrc(g, !!fromClose || !inTradingHours(), (g.market&&g.market.priceDate)||null);
+  return true;
+}
+/* 现价来源标注（界面用）：非交易时段/接口无价时，显示的其实是最近收盘价 */
+function priceSrcTag(g){
+  if(!g || !g._priceFromClose) return "";
+  const dt=String(g._priceDate||"").slice(5).replace("-","/");
+  return ` <span class="pcls" title="非交易时段，显示最近收盘价">${dt? "收盘 "+dt : "收盘价"}</span>`;
+}
+/* 自愈：若某些网格现价被写成 0（未开盘取数失败等），用其行情/价格路径的最近收盘价补正 */
+function healZeroPrices(){
+  let changed=false;
+  (state.grids||[]).forEach(g=>{
+    const p=g.cond&&g.cond.params; if(!p) return;
+    const cur=+p.currentPrice;
+    if(isFinite(cur) && cur>0){
+      if(!inTradingHours()) markPriceSrc(g, true, (g.market&&g.market.priceDate)||lastKlineDate(g));
+      return;
+    }
+    const k=(g.market&&g.market.kline)||[]; const kk=k.length?k[k.length-1]:null;
+    const pp=g.pricePath||[]; const ppl=pp.length?pp[pp.length-1]:null;
+    const close=(kk && +kk.close>0)? +kk.close : (ppl && +ppl.close>0? +ppl.close : 0);
+    if(close>0){ p.currentPrice=close; markPriceSrc(g, true, (kk&&kk.date)||(ppl&&ppl.date)||null); changed=true; }
+  });
+  if(changed) saveLocal();
+  return changed;
+}
 function fetchMarketEM(code){
   const start=daysAgoISO(400), end=todayISO();
   return Promise.all([fetchEMPrice(code), fetchEMKline(code,start,end)]).then(([price, klineLong])=>{
@@ -6647,7 +6714,7 @@ function fetchMarketEM(code){
     const startWin=daysAgoISO(63);
     let chart=klineLong.filter(x=>x.date>=startWin);
     if(chart.length<2) chart=klineLong.slice(Math.max(0,n-44));
-    return {name:price.name, price:price.price, high52,low52,high60,low60,dailyVol:rstd,annVol, kline:chart, source:"eastmoney", fetchedAt:todayISO()};
+    return fixMarketPrice({name:price.name, price:price.price, prevClose:price.prevClose, high52,low52,high60,low60,dailyVol:rstd,annVol, kline:chart, source:"eastmoney", fetchedAt:todayISO()});
   });
 }
 /* 当日分时（1分钟）K线：用于成交驱动网格自动录入，按时间顺序扫描穿越。字段顺序 [time,open,close,high,low,...]
@@ -6728,8 +6795,12 @@ function fetchIntraday(code){
   return fetchIntradayEM(code).then(b=> (b&&b.length)? b : Promise.reject(new Error("空"))).catch(()=> fetchIntradayTX(code));
 }
 function fetchPrice(code){
-  if(cloudCfg()) return fetchPriceProxy(code).catch(e=> Promise.reject(new Error("云端行情代理连接失败："+(e&&e.message||e)+"（可能你的网络无法访问 supabase.co）")));
-  return fetchEMPrice(code).catch(()=> fetchTencentPrice(code));
+  /* 轻量现价：若接口在未开盘/停牌返回 0 或失败 → 用日K收盘价兜底，保证界面不出现 0 元 */
+  const closeFallback=()=> fetchMarketEM(code).then(m=>({name:m.name, price:m.price, prevClose:m.prevClose, fromClose:true}))
+                                .catch(()=> fetchMarketTX(code).then(m=>({name:m.name, price:m.price, fromClose:true})));
+  const ensure=d=> (d && isFinite(+d.price) && +d.price>0) ? Promise.resolve(d) : closeFallback();
+  if(cloudCfg()) return fetchPriceProxy(code).then(ensure).catch(()=> ensure(null));
+  return fetchEMPrice(code).then(ensure).catch(()=> ensure(null));
 }
 function fetchMarketTX(code){
   const start=daysAgoISO(400), end=todayISO();
@@ -6746,7 +6817,7 @@ function fetchMarketTX(code){
     const startWin=daysAgoISO(63); // 今天及之前约 2 个月的行情窗口
     let chart=klineLong.filter(x=>x.date>=startWin);
     if(chart.length<2) chart=klineLong.slice(Math.max(0,n-44));   // 兜底：样本不足时回退到最近 ~44 根
-    return {name:price.name, price:price.price, high52,low52,high60,low60,dailyVol:rstd,annVol, kline:chart, source:"tencent", fetchedAt:todayISO()};
+    return fixMarketPrice({name:price.name, price:price.price, prevClose:price.prevClose, high52,low52,high60,low60,dailyVol:rstd,annVol, kline:chart, source:"tencent", fetchedAt:todayISO()});
   });
 }
 /* 行情获取：云端代理优先（绕开本机网络屏蔽）；代理失败时给出明确提示，而非静默回退到被屏蔽的腾讯源 */
@@ -6754,6 +6825,7 @@ function fetchMarket(code){
   if(cloudCfg()){
     return fetchMarketProxy(code)
       .then(m=>{
+        m=fixMarketPrice(m);   // 未开盘代理可能给 0 价 → 回退收盘价并标记
         // 代理当日数据新鲜（最后一根=今天）→ 直接用；否则回退东方财富/腾讯直连取当日行情，
         // 保证自动录入基于最新实盘（代理偶发滞后一天时仍能正确触发）
         if(m && m.kline && m.kline.length && m.kline[m.kline.length-1].date===todayISO()) return m;
@@ -6774,7 +6846,7 @@ function refreshMarket(id, silent){
     g._fetching=false;
     g.market=m;
     g.pricePath=m.kline.map(x=>({date:x.date, close:x.close}));
-    g.cond.params.currentPrice=m.price;
+    applyLivePrice(g, m.price, m.priceFromClose);   // 有效价才覆盖；未开盘则以收盘价为准并标注
     const n=syncLiveClose(g);
     saveLocal();
     $("view").innerHTML=renderDetail(g); bindDetail(g);
@@ -6787,7 +6859,7 @@ function refreshMarket(id, silent){
 function refreshPrice(id){
   const g=getGrid(id); if(!g) return;
   fetchPrice(g.meta.code).then(d=>{
-    g.cond.params.currentPrice=d.price; const n=syncLiveClose(g); saveLocal();
+    applyLivePrice(g, d.price, d.fromClose); const n=syncLiveClose(g); saveLocal();
     $("view").innerHTML=renderDetail(g); bindDetail(g);
     toast("已更新 "+g.meta.name+" 现价 ¥"+fmt(d.price,3)+(n>0?` · 已同步 ${n} 笔当日收盘`:""));
   }).catch(err=> alert("现价获取失败（"+(err&&err.message||err)+"），可手动修改当前价。"));
@@ -6803,7 +6875,7 @@ function refreshAllPrices(silent){
   if(!silent) toast("正在刷新全部标的现价…("+state.grids.length+")");
   Promise.all(state.grids.map(g=>
     fetchPrice(g.meta.code).then(d=>{
-      g.cond.params.currentPrice=d.price; g._autoFetched=true;
+      applyLivePrice(g, d.price, d.fromClose); g._autoFetched=true;
       const c=syncLiveClose(g);
       return {g, ok:true, price:d.price, synced:c};
     }).catch(err=>{
@@ -6833,7 +6905,7 @@ function refreshAllMarket(silent){
     fetchMarket(g.meta.code).then(m=>{
       g.market=m;
       g.pricePath=m.kline.map(x=>({date:x.date, close:x.close}));
-      g.cond.params.currentPrice=m.price; g._autoFetched=true;
+      applyLivePrice(g, m.price, m.priceFromClose); g._autoFetched=true;
       const c=syncLiveClose(g);
       return {g, ok:true, price:m.price, synced:c};
     }).catch(err=>{
@@ -7235,11 +7307,13 @@ if(cloudCfg()){
     }catch(e){}
     try{ ensureTestGrid(); }catch(e){}
     maybeSnapshot();
+    try{ if(healZeroPrices()) render(); }catch(e){}        // 现价被写成 0 的自愈（未开盘取数失败等）
     _syncSettled=true;                                     // 首轮同步完成，允许巡检冲突提示
     setTimeout(()=>{ try{ maybeWarnTradeConflicts(); }catch(e){} }, 1200);
   });
 } else {
   ensureTestGrid();
+  try{ if(healZeroPrices()) render(); }catch(e){}
   _syncSettled=true;
   setTimeout(()=>{ try{ maybeWarnTradeConflicts(); }catch(e){} }, 1200);
 }
