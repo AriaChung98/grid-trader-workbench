@@ -76,7 +76,7 @@ h1{font-size:25px;font-weight:600;margin:5px 0 2px;letter-spacing:.01em;}
 .band .row > div:only-child{grid-column:1 / -1}
 .tag{display:inline-block;padding:1px 7px;border-radius:2px;font-size:11px;letter-spacing:.02em;white-space:nowrap}
 .tag.urgent{background:#FBEDEA;color:var(--up);border:1px solid #EAC9C2}
-.tag.info{background:transparent;border:1px solid var(--ink);color:var(--ink)}
+.tag.info{background:#F3F1EB;border:1px solid #E4E1D9;color:#6E6B63;border-radius:3px;padding:2px 8px;font-weight:400}
 .tag.ok{background:#E8F1EC;color:var(--down);border:1px solid #C4E0D0}
 /* 今日自动录入：状态栏只显示「已录入X笔」，鼠标移入/点按展开浮窗看具体明细 */
 .auto-rec-pop{position:relative;cursor:pointer;outline:none}
@@ -4949,9 +4949,9 @@ function renderOverview(){
       <div class="cond">${cfg
         ? `最新基准 <b>¥${fmt(base,3)}</b> · 间距 <b>${pct(c.spacingPct,2)}</b> · 上<b>${c.upGrids}</b>/下<b>${c.downGrids}</b> 格<br>
         每笔 <b>${fmt(c.qtyPerTrade,0)}</b> · 资金 <b>¥${fmt(c.initCapital,0)}</b> · 区间 ¥${fmt(gl.lower,3)}~${fmt(gl.upper,3)}${barHTML? "" : `<br>现价 <b class="${signClass(sm.cur-c.startPrice)}">¥${fmt(sm.cur,3)}</b>${priceSrcTag(g)}`}`
-        : `<b>建仓阶段（尚未建立条件单）</b><br>
-        已投入 <b>¥${fmt(sm.cumBuyAmt - sm.cumSellAmt,0)}</b> · 现价 <b class="${signClass(sm.cur-c.startPrice)}">¥${fmt(sm.cur,3)}</b>${priceSrcTag(g)}<br>
-        建仓 ${g.trades.filter(t=>t.type==="建仓").length} 笔 · 待设网格`}</div>
+        : `尚未建立条件单 · 待设网格<br>
+        已投入 <b>¥${fmt(sm.cumBuyAmt - sm.cumSellAmt,0)}</b> · 建仓 <b>${g.trades.filter(t=>t.type==="建仓").length}</b> 笔<br>
+        现价 <b class="${signClass(sm.cur-c.startPrice)}">¥${fmt(sm.cur,3)}</b>${priceSrcTag(g)}`}</div>
       <div class="tgcell">${barHTML}</div>
       <div class="profit ${signClass(sm.totalProfit)}">${fmt(sm.totalProfit,2)}<div style="font-size:11px;color:var(--muted);font-weight:400">实际利润</div>
         <div style="font-size:11px;color:var(--muted);font-weight:400">持仓 ${fmt(holding,0)} 股</div></div>
