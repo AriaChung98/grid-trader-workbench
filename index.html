@@ -5723,7 +5723,6 @@ function renderBandGrid(g, sm, posHold){
 function renderKChart(kline, cond, trades){
   if(!kline||kline.length===0) return '<div class="empty">暂无行情，点击“获取实时行情”</div>';
   const hasOHLC = kline[0].open!=null && kline[0].open!==undefined;
-  const gl = cond? gridLevels(cond) : null;
   const curPrice = cond? cond.currentPrice : null;
   // 下次触发：固定网格线（锚定初始基准价），取现价下方最近买入线 / 上方最近卖出线
   let buyNext=null, sellNext=null;
@@ -5731,9 +5730,13 @@ function renderKChart(kline, cond, trades){
   const W = Math.max(340, kline.length*16+54), H=300, padL=10, padR=54, padT=16, padB=24;
   let all=[...kline.map(x=>x.high!=null?x.high:x.close), ...kline.map(x=>x.low!=null?x.low:x.close)];
   if(curPrice) all.push(curPrice);
-  if(gl){ all.push(gl.base, gl.upper, gl.lower); gl.down.forEach(v=>all.push(v)); gl.up.forEach(v=>all.push(v)); }
+  /* 注意：不要把整条网格价格带（upper/lower 及各档价位）纳入 y 轴范围——
+     那些价位在图上并不绘制（网格结构线已取消，只画 B/S 徽章与「下次触发」虚线），
+     纳入只会把坐标轴撑到远宽于行情，导致 K 线被压成一条细带、上下留大片空白。
+     y 轴只覆盖：K 线高低 + 现价 + 下次买/卖触发价。 */
   if(buyNext!=null) all.push(buyNext, sellNext);
   let lo=Math.min(...all), hi=Math.max(...all);
+  if(!(hi-lo > Math.abs(hi||1)*1e-4)){ const mid=(hi+lo)/2 || 1; lo=mid*0.98; hi=mid*1.02; }   // 范围极小的兜底（防除零）
   const pad=(hi-lo)*0.1; lo-=pad; hi+=pad;
   const y=v=> padT + (hi-v)/(hi-lo)*(H-padT-padB);
   const xw=(W-padL-padR)/kline.length;
