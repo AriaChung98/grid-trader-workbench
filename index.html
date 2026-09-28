@@ -679,6 +679,7 @@ tbody tr:hover{background:#FBFAF7}
 .rb-head .k{font-size:11px;color:var(--muted)}
 .rb-head .v{font-size:23px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:4px}
 .rb-head .s{font-size:11px;color:var(--muted);margin-top:3px}
+.fee-note{font-size:11px;font-weight:400;color:var(--muted);margin-left:7px;white-space:nowrap;cursor:help;border-bottom:1px dotted var(--line)}
 .rb-head .subs{margin-top:11px;padding-top:10px;border-top:1px dashed var(--line);display:flex;flex-direction:column;gap:6px}
 .rb-head .subs>div{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-size:12px;font-variant-numeric:tabular-nums}
 .rb-head .subs span{color:var(--muted)}
@@ -1424,32 +1425,36 @@ function computeBacktest(g){
      扣完后 剩余各批次成本合计 ÷ 剩余股数 = 持仓成本(每股)。
      恒等式自动成立：总收益(totalAssets−committed) = 累计网格收益(已实现) + 持仓浮动(未实现)。 */
   let J=committed, buyAmt=0, sellAmt=0, realized=0;   // 现金 / 累计买入(含费) / 累计卖出(净费) / 累计已实现网格收益
-  const lots=[];                                      // 买入批次：{qty, cost(含费)}；LIFO 从数组尾部扣
+  let feeRealized=0;                                  // 已从「累计网格收益」中扣掉的手续费（= 被扣批次的买入费分摊 + 卖出费）
+  const lots=[];                                      // 买入批次：{qty, cost(含费), fee(该批次手续费)}；LIFO 从数组尾部扣
   const rows=[];
   for(const t of trades){
     const type=t.type, C=t.trigger, D=t.qty, L=t.close;
     const E=D*C, F=E*p.feeRate, G=Math.max(F,p.minFee);
     let realizedThis=0;
     if(type==="建仓"||type==="买入"){
-      lots.push({qty:D, cost:E+G});                   // 建仓/买入：登记批次、减现金(含费)
+      lots.push({qty:D, cost:E+G, fee:G});            // 建仓/买入：登记批次、减现金(含费)
       J -= (E+G); buyAmt += E+G;
     } else {
-      const net=E-G; let need=D, consumed=0;          // 卖出：LIFO 逐批扣减
+      const net=E-G; let need=D, consumed=0, consumedFee=0;   // 卖出：LIFO 逐批扣减
       while(need>1e-9 && lots.length){
         const lot=lots[lots.length-1];
         const take=Math.min(need, lot.qty);
         const per= lot.qty>0 ? lot.cost/lot.qty : 0;
-        consumed += per*take; lot.qty-=take; lot.cost-=per*take; need-=take;
+        const feePer= lot.qty>0 ? lot.fee/lot.qty : 0;        // 费用跟股走：只带走被扣那部分股的买入费
+        consumed += per*take; consumedFee += feePer*take;
+        lot.qty-=take; lot.cost-=per*take; lot.fee-=feePer*take; need-=take;
         if(lot.qty<=1e-9) lots.pop();
       }
       realizedThis = net - consumed;                  // 本笔实现（已扣买卖两端手续费）
       realized += realizedThis; J += net; sellAmt += net;
+      feeRealized += consumedFee + G;                 // 本笔动用的买入费分摊 + 本笔卖出费 = 本笔已扣手续费
     }
     let I2=0, K2=0; for(const l of lots){ I2+=l.qty; K2+=l.cost; }
     const M=L*I2, N=J+M, T=(I2!==0?K2/I2:0);
     const V = realized;                               // 累计网格收益（LIFO 配对·已实现）
     const holdInvested = I2!==0 ? K2/I2 : 0;          // 持仓成本(每股) = 配对后剩余成本 ÷ 剩余持仓
-    rows.push({date:t.date,type,C,D,E,F,G,L,I:I2,J,K:K2,M,N,T,V,cumBuy:buyAmt,cumSell:sellAmt,holdInvested,realizedThis});
+    rows.push({date:t.date,type,C,D,E,F,G,L,I:I2,J,K:K2,M,N,T,V,cumBuy:buyAmt,cumSell:sellAmt,holdInvested,realizedThis,feeRealized});
   }
   const cur = frozenCur(g);   // 停止网格时冻结为停止日收盘价（或当日现价）
   const last=rows[rows.length-1];
@@ -1478,7 +1483,9 @@ function computeBacktest(g){
     Vcum, gridPos:last?last.I:0, gridAvg:holdCostPer,
     unreal:unrealized, realProfit:totalProfit, peakCap:holdCost, holdCost, holdCostPer, holdCostInvested, cumBuyAmt:buyAmt, cumSellAmt:sellAmt,
     gridReturn, totalAssets, overallReturn, annual, chg, annualChg, passive, excess, cur, days, committedCapital:committed,
-    totalProfit, realized:Vcum, unrealized, cash:last?last.J:0
+    totalProfit, realized:Vcum, unrealized, cash:last?last.J:0,
+    /* 手续费三口径：feeInRealized=已从累计网格收益里扣掉的费；feeInHolding=仍留在剩余持仓批次成本里的费（卖出时才扣）；feeTotalAll=全部交易费用合计 */
+    feeInRealized:feeRealized, feeInHolding:Math.max(0, feeAmt-feeRealized), feeTotalAll:feeAmt
   }};
 }
 
@@ -5331,7 +5338,7 @@ function renderDetail(g){
         <div class="rbh">
           <div class="k">网格利润（累计网格收益）<span class="tip-anchor" data-tip="LIFO 配对：每笔卖出「净得(扣卖出费) − 被扣买入批次成本(含买入费)」的累计已实现额；与「持仓浮动」相加 = 实际利润（总资产 − 投入基准）。">口径</span></div>
           ${isConfigured(g)
-            ? `<div class="v ${signClass(sm.Vcum)}">${fmt(sm.Vcum,2)}</div>
+            ? `<div class="v ${signClass(sm.Vcum)}">${fmt(sm.Vcum,2)}<span class="fee-note" title="累计网格收益已扣除的手续费 = 各笔卖出所动用买入批次的买入费分摊 + 各笔卖出费。剩余持仓批次的买入费 ¥${fmt(sm.feeInHolding,2)} 尚未扣除，待这些股卖出时再扣（费用跟股走）。全部交易费用合计 ¥${fmt(sm.feeTotalAll,2)}。">已扣费 ¥${fmt(sm.feeInRealized,2)}</span></div>
           <div class="subs">
             <div><span>网格收益率</span><b class="${signClass(sm.gridReturn)}">${pct(sm.gridReturn,1)}</b></div>
             <div><span>网格超额收益</span><b class="${signClass(sm.excess)}">${pct(sm.excess,1)}</b></div>
