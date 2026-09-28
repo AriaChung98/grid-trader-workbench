@@ -1420,13 +1420,15 @@ function computeBacktest(g){
   // → 投入基准记 0、实时总资产记 0，避免把"计划投入 6 万"误显示成"已有 6 万资产"。
   const committed = configured ? (started ? p.initCapital : 0) : (netInvestedPre + feeAmt);
   /* 持仓成本口径 = 「配对剩余成本」（LIFO，最近买入优先）：
-     买入按批次(lot)记账；卖出时从"最近买入"的批次起逐批扣减，被扣掉的那部分批次成本 = 本笔卖出的成本，
-     本笔实现 = 卖出净得(扣卖出费) − 被扣成本(已含买入费)。
-     扣完后 剩余各批次成本合计 ÷ 剩余股数 = 持仓成本(每股)。
+     买入按批次(lot)记账；卖出时从"最近买入"的批次起逐批扣减。
+     **手续费「整笔计费」口径（一回合=买5+卖5）**：每笔买入的手续费不做按股分摊，而是在该批次
+     「首次被卖出」时全额计入本笔卖出的成本；此后该批次不再含费。卖出费另计。
+     故一个「一次买+一次卖」的完整回合，成本恒为 买费 + 卖费（本例各 ¥5，合计 ¥10）。
+     剩余各批次成本合计 ÷ 剩余股数 = 持仓成本(每股)。
      恒等式自动成立：总收益(totalAssets−committed) = 累计网格收益(已实现) + 持仓浮动(未实现)。 */
   let J=committed, buyAmt=0, sellAmt=0, realized=0;   // 现金 / 累计买入(含费) / 累计卖出(净费) / 累计已实现网格收益
-  let feeRealized=0;                                  // 已从「累计网格收益」中扣掉的手续费（= 被扣批次的买入费分摊 + 卖出费）
-  const lots=[];                                      // 买入批次：{qty, cost(含费), fee(该批次手续费)}；LIFO 从数组尾部扣
+  let feeRealized=0;                                  // 已从「累计网格收益」中扣掉的手续费（= 已计入的买入费 + 卖出费）
+  const lots=[];                                      // 买入批次：{qty, cost(含费), fee(尚未计入的该批次买入费)}；LIFO 从数组尾部扣
   const rows=[];
   for(const t of trades){
     const type=t.type, C=t.trigger, D=t.qty, L=t.close;
@@ -1440,15 +1442,15 @@ function computeBacktest(g){
       while(need>1e-9 && lots.length){
         const lot=lots[lots.length-1];
         const take=Math.min(need, lot.qty);
-        const per= lot.qty>0 ? lot.cost/lot.qty : 0;
-        const feePer= lot.qty>0 ? lot.fee/lot.qty : 0;        // 费用跟股走：只带走被扣那部分股的买入费
-        consumed += per*take; consumedFee += feePer*take;
-        lot.qty-=take; lot.cost-=per*take; lot.fee-=feePer*take; need-=take;
+        const rawPer= lot.qty>0 ? (lot.cost-lot.fee)/lot.qty : 0;   // 不含费单价
+        const takeFee= lot.fee;                     // 整笔计费：该批次买入费在其首次被卖出时全额计入（不按股分摊）
+        consumed += rawPer*take + takeFee; consumedFee += takeFee;
+        lot.qty-=take; lot.cost-=(rawPer*take + takeFee); lot.fee=0; need-=take;
         if(lot.qty<=1e-9) lots.pop();
       }
       realizedThis = net - consumed;                  // 本笔实现（已扣买卖两端手续费）
       realized += realizedThis; J += net; sellAmt += net;
-      feeRealized += consumedFee + G;                 // 本笔动用的买入费分摊 + 本笔卖出费 = 本笔已扣手续费
+      feeRealized += consumedFee + G;                 // 本笔计入的买入费 + 本笔卖出费 = 本笔已扣手续费
     }
     let I2=0, K2=0; for(const l of lots){ I2+=l.qty; K2+=l.cost; }
     const M=L*I2, N=J+M, T=(I2!==0?K2/I2:0);
@@ -2220,12 +2222,12 @@ function simulateGrid(path, prm, hi, lo, valPrice, seedQty){
   const upper= base0*Math.pow(1+sp, upN);      // 静态上轨（突破后暂停卖出）
   const lower = base0*Math.pow(1-sp, downN);   // 静态下轨（跌破后暂停买入）
   let anchor=base0, cash=init, pos=0, realized=0, peak=0, buys=0, sells=0;
-  const lots=[];   // 买入批次 {qty, cost(含费)}：LIFO 配对（与①持仓成本口径一致）
+  const lots=[];   // 买入批次 {qty, cost(含费), fee(尚未计入的买入费)}：LIFO 配对（与①持仓成本口径一致）
   /* 期初预建底仓（seedQty>0 时）：仅用于"待建仓标的"的收益预测——按现价基准一次性虚拟建底仓，
      之后网格仍只买卖配对浮仓（底仓不参与卖出配对），使预测收益不为 0、也更接近"按推荐方案部署"的实况 */
   if(seedQty>0){
     const sFee=Math.max(seedQty*base0*feeRate, minFee);
-    if(cash > seedQty*base0 + sFee){ cash -= seedQty*base0 + sFee; pos = seedQty; lots.push({qty:seedQty, cost:seedQty*base0+sFee}); }
+    if(cash > seedQty*base0 + sFee){ cash -= seedQty*base0 + sFee; pos = seedQty; lots.push({qty:seedQty, cost:seedQty*base0+sFee, fee:sFee}); }
   }
   for(let k=1;k<path.length;k++){
     const prev=path[k-1], b=path[k];
@@ -2237,7 +2239,7 @@ function simulateGrid(path, prm, hi, lo, valPrice, seedQty){
       const lv=anchor*(1-sp);
       const fee=Math.max(qty*lv*feeRate, minFee);
       if(cash < qty*lv+fee) break;             // 现金不足停止加仓
-      cash-=qty*lv+fee; pos+=qty; lots.push({qty, cost:qty*lv+fee}); buys++;
+      cash-=qty*lv+fee; pos+=qty; lots.push({qty, cost:qty*lv+fee, fee}); buys++;
       anchor=lv; px=lv;
     }
     /* —— 从最新价反弹到当日高点：逐格卖出（需有配对库存），锚随成交上移（不越过上轨） —— */
@@ -2251,8 +2253,10 @@ function simulateGrid(path, prm, hi, lo, valPrice, seedQty){
       while(need>1e-9 && lots.length){
         const lot=lots[lots.length-1];
         const take=Math.min(need, lot.qty);
-        const per= lot.qty>0 ? lot.cost/lot.qty : 0;
-        consumed+=per*take; lot.qty-=take; lot.cost-=per*take; need-=take;
+        const rawPer= lot.qty>0 ? (lot.cost-lot.fee)/lot.qty : 0;   // 不含费单价
+        const takeFee= lot.fee;                     // 整笔计费：批次买入费在首次被卖出时全额计入（同①）
+        consumed += rawPer*take + takeFee;
+        lot.qty-=take; lot.cost-=(rawPer*take + takeFee); lot.fee=0; need-=take;
         if(lot.qty<=1e-9) lots.pop();
       }
       cash+=net; pos-=qty; realized+=net-consumed; sells++;
@@ -5336,9 +5340,9 @@ function renderDetail(g){
           </div>
         </div>
         <div class="rbh">
-          <div class="k">网格利润（累计网格收益）<span class="tip-anchor" data-tip="LIFO 配对：每笔卖出「净得(扣卖出费) − 被扣买入批次成本(含买入费)」的累计已实现额；与「持仓浮动」相加 = 实际利润（总资产 − 投入基准）。">口径</span></div>
+          <div class="k">网格利润（累计网格收益）<span class="tip-anchor" data-tip="LIFO 配对：每笔卖出「净得(扣卖出费) − 被扣买入批次成本」的累计已实现额。手续费按「整笔计费」——每笔买入的费在其批次首次被卖出时全额计入，不按股分摊，故一个「一次买+一次卖」的回合恒为 买费+卖费（如各 ¥5 则共 ¥10）；与「持仓浮动」相加 = 实际利润（总资产 − 投入基准）。">口径</span></div>
           ${isConfigured(g)
-            ? `<div class="v ${signClass(sm.Vcum)}">${fmt(sm.Vcum,2)}<span class="fee-note" title="累计网格收益已扣除的手续费 = 各笔卖出所动用买入批次的买入费分摊 + 各笔卖出费。剩余持仓批次的买入费 ¥${fmt(sm.feeInHolding,2)} 尚未扣除，待这些股卖出时再扣（费用跟股走）。全部交易费用合计 ¥${fmt(sm.feeTotalAll,2)}。">已扣费 ¥${fmt(sm.feeInRealized,2)}</span></div>
+            ? `<div class="v ${signClass(sm.Vcum)}">${fmt(sm.Vcum,2)}<span class="fee-note" title="累计网格收益已扣除的手续费 = 各笔卖出费 + 已计入的各笔买入费（买入费按「整笔计费」：在该批次首次被卖出时全额计入，不按股分摊）。尚未计入的买入费 ¥${fmt(sm.feeInHolding,2)} 仍留在对应持仓批次中，待其首次卖出时全额计入。全部交易费用合计 ¥${fmt(sm.feeTotalAll,2)}。一个「一次买+一次卖」的回合 = 买费 + 卖费。">已扣费 ¥${fmt(sm.feeInRealized,2)}</span></div>
           <div class="subs">
             <div><span>网格收益率</span><b class="${signClass(sm.gridReturn)}">${pct(sm.gridReturn,1)}</b></div>
             <div><span>网格超额收益</span><b class="${signClass(sm.excess)}">${pct(sm.excess,1)}</b></div>
@@ -5414,7 +5418,7 @@ function renderDetail(g){
       <div class="card-body">
         <div class="scroll" style="margin-top:0"><table><thead><tr>
           <th>日期</th><th>触发时间</th><th>类型</th><th>触发价</th><th>数量</th><th>当日收盘</th>
-          <th>累计现金</th><th>持仓市值</th><th>总资产</th><th title="配对剩余成本(含费)：LIFO 配对卖出后，剩余持仓的买入成本 ÷ 剩余股数">持仓成本</th><th title="LIFO 配对：每笔卖出净得 − 被扣买入批次成本(含费)，逐笔累计">累计网格收益</th><th></th>
+          <th>累计现金</th><th>持仓市值</th><th>总资产</th><th title="配对剩余成本(含费)：LIFO 配对卖出后，剩余持仓的买入成本 ÷ 剩余股数">持仓成本</th><th title="LIFO 配对：每笔卖出净得（已扣卖出费）− 被扣买入批次成本；买入费按「整笔计费」，在该批次首次被卖出时全额计入">累计网格收益</th><th></th>
         </tr></thead><tbody id="tradeBody">${tradeRows}</tbody></table></div>
         ${pager}
       </div>
