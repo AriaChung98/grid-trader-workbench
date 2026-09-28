@@ -1407,7 +1407,12 @@ function activeGrid(){ return getGrid(state.activeId); }
 
 /* ============ 回测引擎（复刻 Excel，已用 Node 逐行验证） ============ */
 function computeBacktest(g){
-  const p = g.cond.params;
+  /* 手续费规则（买卖两端一致）：每笔手续费 = max(成交额 × 费率, 最低手续费)，不足最低费按最低费计。
+     默认 费率 0.0001（万分之一）/ 最低费 ¥5；此处做规范化，避免历史或残缺参数缺字段时算出 NaN。 */
+  const p = Object.assign({}, g.cond.params, {
+    feeRate: (g.cond.params && g.cond.params.feeRate>0) ? g.cond.params.feeRate : 0.0001,
+    minFee : (g.cond.params && g.cond.params.minFee >0) ? g.cond.params.minFee  : 5
+  });
   const trades = g.trades.slice().sort((a,b)=> a.date<b.date?-1:(a.date>b.date?1:0));
   const configured = isConfigured(g);
   // 投入资金基准：已配置网格=初始资金；建仓阶段（跳过条件单）= 实际累计净投入（尚未确认闲置现金）
@@ -2217,7 +2222,10 @@ function syncAutoFields(d){
    totalProfit(市值法总收益)/unrealized(持仓浮动)/vGrid(落袋网格收益=totalProfit−unrealized)。 */
 function simulateGrid(path, prm, hi, lo, valPrice, seedQty){
   const base0=prm.basePrice, sp=prm.spacingPct, qty=prm.qtyPerTrade;
-  const upN=prm.upGrids||0, downN=prm.downGrids||0, feeRate=prm.feeRate, minFee=prm.minFee, init=prm.initCapital;
+  /* 手续费规则：买卖两端均 = max(成交额 × 费率, 最低费)；默认 万分之一 / ¥5（缺字段时兜底，防 NaN） */
+  const upN=prm.upGrids||0, downN=prm.downGrids||0,
+        feeRate=(prm.feeRate>0? prm.feeRate : 0.0001), minFee=(prm.minFee>0? prm.minFee : 5),
+        init=prm.initCapital;
   if(!(base0>0) || !(qty>0)) return {realized:0, overall:0, gridRet:0, peak:0, totalAssets:init||0, totalProfit:0, unrealized:0, vGrid:0, buys:0, sells:0, holdRet:0, finalP:(path&&path.length)?path[path.length-1]:0};
   const upper= base0*Math.pow(1+sp, upN);      // 静态上轨（突破后暂停卖出）
   const lower = base0*Math.pow(1-sp, downN);   // 静态下轨（跌破后暂停买入）
@@ -2294,7 +2302,10 @@ function analyze(g){
   const recUp=Math.max(1,Math.round(Math.log(maxP/g.cond.params.basePrice)/Math.log(1+recSpacing)));
   const recDown=Math.max(1,Math.round(Math.log(g.cond.params.basePrice/minP)/Math.log(1+recSpacing)));
   const rec={basePrice:g.cond.params.currentPrice, spacingPct:recSpacing, upGrids:recUp, downGrids:recDown,
-             qtyPerTrade:g.cond.params.qtyPerTrade, feeRate:g.cond.params.feeRate, minFee:g.cond.params.minFee, initCapital:g.cond.params.initCapital};
+             qtyPerTrade:g.cond.params.qtyPerTrade,
+             feeRate:(g.cond.params.feeRate>0? g.cond.params.feeRate : 0.0001),
+             minFee:(g.cond.params.minFee>0? g.cond.params.minFee : 5),
+             initCapital:g.cond.params.initCapital};
   const sim=simulateGrid(path,rec);
   return {mean,sd,annVol,minP,maxP,range,dailyVol:rstd,cur,rec,sim,pathLen:n};
 }
@@ -5246,7 +5257,7 @@ function renderDetail(g){
   // 行情统计（日/年化波动率从历史收盘价自行计算，并纳入最新现价动态更新）
   const m=g.market;
   let vol={dailyVol:null, annVol:null};
-  const vSeries = (m && m.kline && m.kline.length>1) ? m.kline : (g.pricePath.length>1 ? g.pricePath : null);
+  const vSeries = (m && m.kline && m.kline.length>1) ? m.kline : (g.pricePath && g.pricePath.length>1 ? g.pricePath : null);
   let vc;
   if(isStopped(g) && vSeries){ vc = truncateSeries(vSeries, g.stop.date) && truncateSeries(vSeries, g.stop.date).length>1 ? truncateSeries(vSeries, g.stop.date) : null; }  // 停止网格：截断到停止日，不追加实时现价（冻结）
   else { vc = buildVolCloses(vSeries, g.cond.params.currentPrice); }
