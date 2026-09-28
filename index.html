@@ -7234,7 +7234,7 @@ function autoGridMonitor(){
         const p = (theDate===today)? fetchIntraday(g.meta.code) : fetchIntradayEMDate(g.meta.code, theDate);
         return p.then(bars=>({theDate, bars})).catch(()=>({theDate, bars:[]}));
       })).then(dayList=>{
-        const addedAll=[], touchedAll=0;
+        const addedAll=[], touchedAll=0, cappedGrids=[];
         for(const {theDate, bars} of dayList){
           if(!(bars && bars.length)) continue;
           /* 校验并清洗分时：
@@ -7249,7 +7249,9 @@ function autoGridMonitor(){
           if(!dayBars.length) continue;
           const dayLow  = Math.min(...dayBars.map(b=> (isFinite(+b.low) && +b.low>0)? +b.low : +b.close));
           const dayHigh = Math.max(...dayBars.map(b=> (isFinite(+b.high)&& +b.high>0)? +b.high : +b.close));
-          // 前收（该交易日之前最近一根收盘），用于重建当分钟高低、避免漏掉穿越
+          /* 前收（该交易日之前最近一根收盘）：**仅用于衔接当日第一根 K 线**（补上开盘跳空的那段），
+             绝不能注入每一根 K 线 —— 否则每根都会有 [前收, 现价] 这么大的振幅，
+             锚点算出的买卖线会被逐根"伪穿越"，一分钟刷出一对买/卖（2026-09-28 510300 事故根因）。 */
           let prevDayClose=cur;
           if(m.kline && m.kline.length){
             const past=m.kline.filter(x=> x.date<theDate && isFinite(+x.close) && +x.close>0);
@@ -7260,8 +7262,9 @@ function autoGridMonitor(){
             const c=+b.close;
             const h=(isFinite(+b.high) && +b.high>0)? +b.high : c;
             const l=(isFinite(+b.low)  && +b.low >0)? +b.low  : c;
-            return {high:Math.max(h,c,prevDayClose), low:Math.min(l,c,prevDayClose), close:c, time:normBarTime(b.t)};
+            return {high:Math.max(h,c), low:Math.min(l,c), close:c, time:normBarTime(b.t)};
           });
+          /* 逐根用「上一根收盘」衔接：i=0 用前收（补开盘跳空），i>0 用前一根收盘（补相邻两根之间的跳空） */
           for(let i=0;i<path.length;i++){
             const prev = i>0 ? path[i-1].close : prevDayClose;
             path[i].high = Math.max(path[i].high, path[i].close, prev);
@@ -7313,9 +7316,15 @@ function autoGridMonitor(){
           const exist=new Set(todaySide.map(t=> t.type+"@"+r3(t.trigger)));
           const autoMap=new Map(); todaySide.forEach(t=>{ if(t._auto) autoMap.set(t.type+"@"+r3(t.trigger), t); });
           const added=[], touched=[];
+          /* 单标的单日自动录入上限：网格正常一天最多几笔；一旦超限必是异常输入（如分时高低被污染），
+             立即止步并在界面提示，避免"每分钟刷一对买/卖"把数据刷爆 */
+          const MAX_AUTO_PER_DAY=20;
+          const autoTodayN=todaySide.filter(t=>t._auto).length;
+          let capped=false;
           const dayClose = dayBars[dayBars.length-1].close;
           for(const d of seq){
             if(added.length >= MAX_ADD) break;
+            if(autoTodayN + added.length >= MAX_AUTO_PER_DAY){ capped=true; break; }
             const key=d.type+"@"+r3(d.trigger);
             if(exist.has(key)){
               const ex=autoMap.get(key);
@@ -7330,8 +7339,9 @@ function autoGridMonitor(){
           }
           if(added.length) addedAll.push({theDate, n:added.length});
           if(touched.length) touchedAll += touched.length;
+          if(capped) cappedGrids.push(g.meta.name);
         }
-        if(addedAll.length){ g._sample=false; return {g, addedAll, touched:touchedAll}; }
+        if(addedAll.length || cappedGrids.length){ g._sample=false; return {g, addedAll, touched:touchedAll, cappedGrids}; }
         return null;
       });
     }).catch(()=>null);
@@ -7339,12 +7349,15 @@ function autoGridMonitor(){
     const logged = results.filter(Boolean);
     if(!logged.length) return;
     save(); render();
-    logged.forEach(({g,addedAll,touched})=>{
+    logged.forEach(({g,addedAll,touched,cappedGrids})=>{
       const pfs=pfNamesOfGrid(g.id);
       const pfTxt = pfs.length? ` · 组合 ${pfs.join("、")}` : "";
       const det = addedAll.map(a=>`${a.theDate} ${a.n}笔`).join("、");
       if(det) toast(`已自动录入「${g.meta.name}」${det}成交（成交驱动网格·已含触发时间）${pfTxt}`);
       else if(touched) toast(`已补全「${g.meta.name}」${touched} 笔自动成交的触发时间${pfTxt}`);
+      if(cappedGrids && cappedGrids.length){
+        toast(`⚠「${cappedGrids.join("、")}」今日自动录入已达上限（20 笔/日）已停止，请核对分时行情是否异常`);
+      }
     });
   });
 }
