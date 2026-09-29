@@ -5933,7 +5933,9 @@ function gridPosInfo(g){
   const ov='<i class="gc" style="left:'+((cellLo-lower)/span*100).toFixed(3)+'%;width:'+(100/N).toFixed(3)+'%"></i>'
          + ticks.join("")
          + '<i class="gm" style="left:'+(ratio*100).toFixed(3)+'%"></i>';
-  const tip='网格带 ¥'+fmt(lower,3)+' ~ ¥'+fmt(upper,3)+'，共 '+N+' 格；现价 ¥'+fmt(c,3)+' 处于第 '+(cell+1)+'/'+N+' 格（自下轨往上数）';
+  const tip='现处 '+txt+'（第 '+(cell+1)+'/'+N+' 格，自下轨往上数）\n'
+          + '网格带 ¥'+fmt(lower,3)+' ~ ¥'+fmt(upper,3)+'，共 '+N+' 格\n'
+          + '现价 ¥'+fmt(c,3);
   return {ov, txt, tip};
 }
 function pfAssetsChartHTML(pf){
@@ -5949,7 +5951,7 @@ function pfAssetsChartHTML(pf){
   if(freeCash>0) data.push({name:"未分配流动现金", mv:0, cash:freeCash, total:freeCash, isCash:true});
   const grand=data.reduce((a,x)=>a+x.total,0);
   if(grand<=0) return `<div class="empty">成员均为建仓阶段或未建仓，暂无资产可显示（持仓市值 + 现金 = 总资产）。</div>`;
-  const FULL_W=200;          // 整条轨道 = 组合总资产（100%），条长即占组合比例
+  const FULL_W=400;          // 整条轨道 = 组合总资产（100%），条长即占组合比例（拉长以放大每格，便于看清档位）
   const MIN_W=3;             // 极小值保留可见细条，但不夸大（原 44px 下限会把 100 元画成 ~24%）
   const items=data.map(x=>{
     const share=grand>0? x.total/grand : 0;
@@ -5974,7 +5976,7 @@ function pfAssetsChartHTML(pf){
         <span class="ac-bar" style="width:${w}px"${gp.tip? ` title="${esc(gp.tip)}"`:""}>${gp.ov}<i class="mv" style="width:${mvp}%"></i><i class="csh" style="width:${100-mvp}%"></i></span>
         <span class="ac-val">¥${fmt(x.total,0)} · ${pctTxt}</span>
       </div>
-      <div class="ac-num">持仓市值 <b>¥${fmt(x.mv,0)}</b>（持仓占比 <b>${holdTxt}</b>）· 现有现金 <b>¥${fmt(x.cash,0)}</b> · 占组合 <b>${pctTxt}</b>${gp.txt? ` · 现处 <b>${gp.txt}</b>`:""}</div>
+      <div class="ac-num">持仓市值 <b>¥${fmt(x.mv,0)}</b>（持仓占比 <b>${holdTxt}</b>）· 现有现金 <b>¥${fmt(x.cash,0)}</b> · 占组合 <b>${pctTxt}</b></div>
     </div>`;
   }).join("");
   return `<div class="card"><div class="card-body">
@@ -5982,7 +5984,7 @@ function pfAssetsChartHTML(pf){
       <div class="ac-sum"><span class="ac-lbl">资产构成 · 各成员持仓市值 + 现金${freeCash>0? "（含未分配流动现金 ¥"+fmt(freeCash,0)+"）":""}</span><span class="ac-grand">¥${fmt(grand,0)}</span></div>
       <div class="ac-scroll"><div class="ac-list">${items}</div></div>
       <div class="ac-hint">← 左右拖动查看完整内容 →</div>
-      <div class="ac-legend"><span><i class="ac-dot" style="background:#5C93DC"></i>持仓市值</span><span><i class="ac-dot" style="background:#C7DBF5"></i>现有现金</span><span><i class="ac-dot" style="background:#FFFFFF;box-shadow:0 0 0 1px rgba(15,44,97,.95)"></i>现价标记</span><span style="color:var(--muted)">条内竖线 = 网格档位 · 深色格 = 现价所在格 · 条长 = 占组合总资产比例</span></div>
+      <div class="ac-legend"><span><i class="ac-dot" style="background:#5C93DC"></i>持仓市值</span><span><i class="ac-dot" style="background:#C7DBF5"></i>现有现金</span><span><i class="ac-dot" style="background:#FFFFFF;box-shadow:0 0 0 1px rgba(15,44,97,.95)"></i>现价标记</span></div>
     </div>
   </div></div>`;
 }
