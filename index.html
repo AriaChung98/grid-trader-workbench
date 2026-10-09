@@ -76,6 +76,10 @@ h1{font-size:25px;font-weight:600;margin:5px 0 2px;letter-spacing:.01em;}
 .band .row > div:only-child{grid-column:1 / -1}
 .tag{display:inline-block;padding:1px 7px;border-radius:2px;font-size:11px;letter-spacing:.02em;white-space:nowrap}
 .tag.urgent{background:#FBEDEA;color:var(--up);border:1px solid #EAC9C2}
+/* 「今天要处理」触发提示 · 一键录入按钮：紧凑浅色，与同行的 urgent 标签同族（不套用大按钮的黑底/38px 最小高度） */
+.btn.rec{min-height:0;padding:3px 12px;font-size:11.5px;font-weight:500;letter-spacing:.02em;
+  background:#FBEDEA;border:1px solid #EAC9C2;color:var(--up);border-radius:2px;white-space:nowrap;cursor:pointer;line-height:1.5}
+.btn.rec:hover{background:#F7DDD6;border-color:#E2B8AF}
 .tag.info{background:#F3F1EB;border:1px solid #E4E1D9;color:#6E6B63;border-radius:3px;padding:2px 8px;font-weight:400}
 .tag.ok{background:#E8F1EC;color:var(--down);border:1px solid #C4E0D0}
 /* 今日自动录入：状态栏只显示「已录入X笔」，鼠标移入/点按展开浮窗看具体明细 */
@@ -5217,7 +5221,7 @@ function renderBandGlobal(sums){
         const ptxt = trig.sides.includes('buy') ? `下个买点 ¥${fmt(trig.buyNext,3)}` : `下个卖点 ¥${fmt(trig.sellNext,3)}`;
         const info=pendingTriggerInfo(g,cur);
         const dateTxt = info? info.date : todayISO();
-        const btn = info? `<span style="float:right;margin-left:12px"><button class="btn sm primary" onclick="quickRecordTrigger('${g.id}')">录入</button></span>` : '';
+        const btn = info? `<span style="float:right;margin-left:12px"><button class="btn rec" onclick="quickRecordTrigger('${g.id}')">录入</button></span>` : '';
         push(`${btn}<span class="tag urgent">${g.meta.code} 已触发网格·${dirsTxt}</span> 当前价 ¥${fmt(cur,3)} 已触及${ptxt}，请及时录入 <b>${dateTxt}</b> ${trig.sides[0]==='buy'?'买入':'卖出'}成交。`);
       }
       if(cur<gl.lower) push(`<span class="tag urgent">${g.meta.code} 跌破下限</span> 当前价 ¥${fmt(cur,3)} 低于网格下限 ¥${fmt(gl.lower,3)}，建议修改条件单。`);
@@ -5789,7 +5793,7 @@ function renderBandGrid(g, sm, posHold){
     const multi = trig.sides.length>1 ? `（今日同时触及 买点 + 卖点，共 ${trig.sides.length} 个方向）` : '';
     const info=pendingTriggerInfo(g,cur);
     const dateTxt = info? info.date : todayISO();
-    const btn = info? `<span style="float:right;margin-left:12px"><button class="btn sm primary" onclick="quickRecordTrigger('${g.id}')">录入</button></span>` : '';
+    const btn = info? `<span style="float:right;margin-left:12px"><button class="btn rec" onclick="quickRecordTrigger('${g.id}')">录入</button></span>` : '';
     items.push(`${btn}<span class="tag urgent">已触发网格·${dirsTxt}</span> 当前价 ¥${fmt(cur,3)} 已触及 ${parts.join(' / ')}（按最新基准价 ¥${fmt(trig.base,3)} 计算），<b>请及时录入 ${dateTxt} 成交</b>。${multi}`);
   }
   if(items.length===0) items.push(`<span class="tag ok">运行平稳</span> 当前价 ¥${fmt(cur,3)} 处于区间内，今日未触发网格，下个买点 ¥${fmt(trig.buyNext,3)} / 卖点 ¥${fmt(trig.sellNext,3)}（按最新基准价 ¥${fmt(trig.base,3)} 计算）。`);
