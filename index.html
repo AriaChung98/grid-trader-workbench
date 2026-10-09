@@ -1940,6 +1940,50 @@ function gridTriggerStatus(g, cur){
   return {triggered:sides.length>0, sides, side:sides[0]||null, buyNext, sellNext, base};
 }
 
+/* 「今天要处理」触发提示：算出那笔待录成交的**真实发生日期**（而非笼统的"今日"）。
+   锚点=最后一笔网格成交（口径同 lastDealPrice：日期最大，同日取录入最后一条）；
+   从其后第一根 K 线起，找第一根 触到买线(low<=buyLine) / 卖线(high>=sellLine) 的 K 线，
+   该 K 线的日期即成交应记日期（价格可能是前几天就穿越了、一直没录入）。
+   历史缺高低价时退回收盘比较；仍找不到（如行情未覆盖到）回退今天。 */
+function pendingTriggerInfo(g, cur){
+  const c=g.cond.params;
+  const trig=gridTriggerStatus(g,cur); if(!trig.triggered) return null;
+  const side=trig.sides[0];
+  const line = side==='buy'? trig.buyNext : trig.sellNext;
+  const qty=Math.max(100, Math.round((c.qtyPerTrade||0)/100)*100);   // 整手（100股倍数），与自动录入一致
+  let anchorDate='';
+  (g.trades||[]).forEach(t=>{ if(t.type!=="买入"&&t.type!=="卖出") return; if(t.date>anchorDate) anchorDate=t.date; });
+  const kl=(g.market && g.market.kline && g.market.kline.length)? g.market.kline
+         : (g.pricePath||[]).map(x=>({date:x.date, close:x.close, high:x.close, low:x.close}));
+  const EPS=1e-9;
+  let hit=null;
+  for(const b of kl){
+    if(!(b && b.date)) continue;
+    if(anchorDate && b.date<=anchorDate) continue;
+    const hi=(isFinite(+b.high)&&+b.high>0)? +b.high : +b.close;
+    const lo=(isFinite(+b.low )&&+b.low >0)? +b.low  : +b.close;
+    if(side==='buy'? (lo<=line+EPS) : (hi>=line-EPS)){ hit=b; break; }
+  }
+  const date=(hit && hit.date)? hit.date : todayISO();
+  const close=(hit && isFinite(+hit.close) && +hit.close>0)? +hit.close : cur;
+  return {side, type: side==='buy'?'买入':'卖出', price:line, date, close, qty, base:trig.base, both:trig.sides.length>1};
+}
+/* 「今天要处理」· 一键录入：把提示里那笔待录成交按真实发生日期直接写入交易清单。
+   按日期序插入（dealBaseBefore 按数组顺序重放，乱序会破坏基准价推导）。 */
+function quickRecordTrigger(gid){
+  const g=getGrid(gid); if(!g) return;
+  const sm=computeBacktest(g).summary;
+  const info=pendingTriggerInfo(g, sm.cur);
+  if(!info){ toast("当前没有待录入的触发成交"); return; }
+  const rec={ date:info.date, type:info.type, qty:info.qty, trigger:round(info.price,3), close:round(info.close,3) };
+  if(info.date===todayISO()) rec.time=nowHM();
+  let at=g.trades.length;
+  for(let i=0;i<g.trades.length;i++){ if(g.trades[i].date>rec.date){ at=i; break; } }
+  g.trades.splice(at,0,rec);
+  save(); render();
+  toast(`已录入「${g.meta.name}」${info.type} ${fmt(info.qty,0)}股 @¥${fmt(info.price,3)}（${info.date}）`);
+}
+
 /* 历史成交：新→旧（同日期按录入逆序），稳定排序 */
 function sortedNewest(g){
   return g.trades.map((t,i)=>({t,i}))
@@ -5171,7 +5215,10 @@ function renderBandGlobal(sums){
         if(!ackGet(ackDone)) push(`<span class="tag ok">${g.meta.code} 今日已处理</span> 今日已录入 ${todaysGrid.length} 笔成交${dirTxt}，无需重复录入。${ackBtn(ackDone,"确定")}`);
       } else if(trig.triggered){
         const ptxt = trig.sides.includes('buy') ? `下个买点 ¥${fmt(trig.buyNext,3)}` : `下个卖点 ¥${fmt(trig.sellNext,3)}`;
-        push(`<span class="tag urgent">${g.meta.code} 已触发网格·${dirsTxt}</span> 当前价 ¥${fmt(cur,3)} 已触及${ptxt}，请及时录入今日${trig.sides[0]==='buy'?'买入':'卖出'}成交。`);
+        const info=pendingTriggerInfo(g,cur);
+        const dateTxt = info? info.date : todayISO();
+        const btn = info? `<span style="float:right;margin-left:12px"><button class="btn sm primary" onclick="quickRecordTrigger('${g.id}')">录入</button></span>` : '';
+        push(`${btn}<span class="tag urgent">${g.meta.code} 已触发网格·${dirsTxt}</span> 当前价 ¥${fmt(cur,3)} 已触及${ptxt}，请及时录入 <b>${dateTxt}</b> ${trig.sides[0]==='buy'?'买入':'卖出'}成交。`);
       }
       if(cur<gl.lower) push(`<span class="tag urgent">${g.meta.code} 跌破下限</span> 当前价 ¥${fmt(cur,3)} 低于网格下限 ¥${fmt(gl.lower,3)}，建议修改条件单。`);
       if(cur>gl.upper) push(`<span class="tag urgent">${g.meta.code} 突破上限</span> 当前价 ¥${fmt(cur,3)} 高于上限 ¥${fmt(gl.upper,3)}，建议上移基准或加格。`);
@@ -5740,7 +5787,10 @@ function renderBandGrid(g, sm, posHold){
     if(trig.sides.includes('buy')) parts.push(`下个买点 ¥${fmt(trig.buyNext,3)}`);
     if(trig.sides.includes('sell')) parts.push(`下个卖点 ¥${fmt(trig.sellNext,3)}`);
     const multi = trig.sides.length>1 ? `（今日同时触及 买点 + 卖点，共 ${trig.sides.length} 个方向）` : '';
-    items.push(`<span class="tag urgent">已触发网格·${dirsTxt}</span> 当前价 ¥${fmt(cur,3)} 已触及 ${parts.join(' / ')}（按最新基准价 ¥${fmt(trig.base,3)} 计算），<b>请及时在「新建交易」录入今日成交</b>。${multi}`);
+    const info=pendingTriggerInfo(g,cur);
+    const dateTxt = info? info.date : todayISO();
+    const btn = info? `<span style="float:right;margin-left:12px"><button class="btn sm primary" onclick="quickRecordTrigger('${g.id}')">录入</button></span>` : '';
+    items.push(`${btn}<span class="tag urgent">已触发网格·${dirsTxt}</span> 当前价 ¥${fmt(cur,3)} 已触及 ${parts.join(' / ')}（按最新基准价 ¥${fmt(trig.base,3)} 计算），<b>请及时录入 ${dateTxt} 成交</b>。${multi}`);
   }
   if(items.length===0) items.push(`<span class="tag ok">运行平稳</span> 当前价 ¥${fmt(cur,3)} 处于区间内，今日未触发网格，下个买点 ¥${fmt(trig.buyNext,3)} / 卖点 ¥${fmt(trig.sellNext,3)}（按最新基准价 ¥${fmt(trig.base,3)} 计算）。`);
   return `<div class="band"><div class="ttl"><span>今天要处理</span><span class="ttl-sub">${g.meta.name}</span></div>${items.map(t=>`<div class="row">${icon}<div>${t}</div></div>`).join("")}</div>`;
