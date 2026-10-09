@@ -1963,7 +1963,10 @@ function pendingTriggerInfo(g, cur){
   let hit=null;
   for(const b of kl){
     if(!(b && b.date)) continue;
-    if(anchorDate && b.date<=anchorDate) continue;
+    /* 含锚点当天：锚点成交后同日继续下跌、又穿越下一格的情形必须算进去
+       （2026-10-09 588080 事故：10/8 买入 1.546 后同日跌到 1.481，已破下一格 1.5074，
+        旧逻辑跳过锚点当天 → 找不到 → 误回退"今天"，日期错一天） */
+    if(anchorDate && b.date<anchorDate) continue;
     const hi=(isFinite(+b.high)&&+b.high>0)? +b.high : +b.close;
     const lo=(isFinite(+b.low )&&+b.low >0)? +b.low  : +b.close;
     if(side==='buy'? (lo<=line+EPS) : (hi>=line-EPS)){ hit=b; break; }
@@ -1986,6 +1989,20 @@ function quickRecordTrigger(gid){
   g.trades.splice(at,0,rec);
   save(); render();
   toast(`已录入「${g.meta.name}」${info.type} ${fmt(info.qty,0)}股 @¥${fmt(info.price,3)}（${info.date}）`);
+  /* 当日成交补真实触发时间：日K只有日期没有时刻，拉当日分时找第一根穿越该价位的分钟线 */
+  if(rec.date===todayISO()){
+    fetchIntraday(g.meta.code).then(bars=>{
+      if(!(bars && bars.length)) return;
+      const EPS=1e-9;
+      const hit=(bars||[]).find(b=>{
+        const lo=(isFinite(+b.low )&&+b.low >0)? +b.low  : +b.close;
+        const hi=(isFinite(+b.high)&&+b.high>0)? +b.high : +b.close;
+        return info.side==='buy'? (lo<=rec.trigger+EPS) : (hi>=rec.trigger-EPS);
+      });
+      const t=hit? normBarTime(hit.t) : null;
+      if(t && t!==rec.time){ rec.time=t; save(); render(); }
+    }).catch(()=>{});
+  }
 }
 
 /* 历史成交：新→旧（同日期按录入逆序），稳定排序 */
