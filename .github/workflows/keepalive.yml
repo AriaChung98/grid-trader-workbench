@@ -1,0 +1,62 @@
+name: supabase-keepalive
+
+# Supabase 免费档保活：每日写一条心跳 + 清理旧行，防止项目
+# 因 7 天无 API 活动被暂停（国庆/春节等休市期页面未开时
+# 工作台不会产生任何写入）。心跳表 gridtrader_heartbeat 与
+# 业务数据（gridtrader / gridtrader_snapshots）完全无关。
+# 附带：每日提交 heartbeat.json 刷新仓库活跃度，避免 GitHub
+# 在 60 天无仓库活动后自动停用 scheduled workflow。
+
+on:
+  schedule:
+    - cron: "0 23 * * *"   # 23:00 UTC = 北京 07:00
+    - cron: "0 15 * * *"   # 15:00 UTC = 北京 23:00
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Heartbeat write + cleanup
+        env:
+          SB_URL: https://hlhsoyuzffndxahwfady.supabase.co
+          SB_ANON: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhsaHNveXV6ZmZuZHhhaHdmYWR5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY5ODgwNjgsImV4cCI6MjEwMjU2NDA2OH0.Kd-KCdcDFtkjBMX47AJRfGE-9QQ1YvuD8P85o2o0hZM
+        run: |
+          set -e
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "heartbeat at $TS"
+          # 1) 写入一条心跳（独立表，不影响业务数据）
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "$SB_URL/rest/v1/gridtrader_heartbeat" \
+            -H "apikey: $SB_ANON" -H "Authorization: Bearer $SB_ANON" \
+            -H "Content-Type: application/json" -H "Prefer: return=minimal" \
+            -d "{\"ts\":\"$TS\",\"note\":\"keepalive\"}")
+          echo "insert -> HTTP $HTTP"
+          [ "$HTTP" = "201" ] || { echo "::error::心跳写入失败 HTTP $HTTP"; exit 1; }
+          # 2) 清理 30 天前的心跳，表恒定 ~60 行
+          CUTOFF=$(date -u -d "30 days ago" +%Y-%m-%dT%H:%M:%SZ)
+          HTTP2=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+            "$SB_URL/rest/v1/gridtrader_heartbeat?ts=lt.$CUTOFF" \
+            -H "apikey: $SB_ANON" -H "Authorization: Bearer $SB_ANON")
+          echo "cleanup -> HTTP $HTTP2"
+
+      - name: Refresh repo activity
+        run: |
+          set -e
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "{\"last\":\"$TS\"}" > heartbeat.json
+          git config user.name "keepalive-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add heartbeat.json
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "keepalive $TS"
+            git push
+          fi
