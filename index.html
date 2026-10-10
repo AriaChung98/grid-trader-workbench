@@ -350,6 +350,8 @@ input[readonly],input:disabled{background:#F1EEE7;color:#6B675E;cursor:not-allow
 .hint{font-size:12px;color:var(--muted);margin-top:10px;line-height:1.6}
 .backup-mini .lab{font-size:12px;color:var(--muted)}
 .backup-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.hb-mini{font-size:11.5px;color:var(--muted);cursor:pointer;margin-left:auto;padding-left:4px;white-space:nowrap}
+.hb-mini:hover{color:var(--ink)}
 .tr-list{display:flex;flex-direction:column;gap:8px}
 .tr-row{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:10px 12px;border:1px solid var(--line);border-radius:3px}
 .tr-main{min-width:0;flex:1 1 auto}
@@ -5092,6 +5094,7 @@ function renderOverview(){
     </div>`;
   }).join("");
   const pfEmpty = pfArr.length===0 ? `<div class="empty">还没有资产组合。点上方「新增资产组合」，把已录网格按资金比例组合回测（收益是否计入总览由勾选控制）。</div>` : "";
+  setTimeout(()=>refreshHeartbeatStatus(),50);   // 渲染后自动查询心跳（必须在 return 之前，return 后语句不执行）
   return `
   ${band}
   <section class="section">
@@ -5127,6 +5130,7 @@ function renderOverview(){
       <button class="btn sm ghost" onclick="exportJSON()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg><span class="txt">导出 JSON</span></button>
       <button class="btn sm ghost" onclick="document.getElementById('imp').click()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21V9M7 14l5-5 5 5M5 3h14"/></svg><span class="txt">导入恢复</span></button>
       <input type="file" id="imp" class="filein" accept="application/json" onchange="importJSON(event)">
+      <span id="hbStatus" class="hb-mini" onclick="refreshHeartbeatStatus(true)" title="GitHub Actions 每日 07:00 / 23:00 自动写入心跳，防止 Supabase 免费档 7 天无活动被暂停。点击手动刷新">心跳：加载中…</span>
     </div>
   </section>`;
 }
@@ -5135,33 +5139,34 @@ function renderOverview(){
    独立表 gridtrader_heartbeat 由 GitHub Actions 每日 07:00/23:00（北京）写入，
    与业务数据（gridtrader/gridtrader_snapshots）完全无关。免费档 7 天无 API
    活动会被暂停，故：最近心跳 <30h=正常；≥30h=已停跳（有被暂停风险）。 */
-function hbSet(el, html){ if(el) el.innerHTML = html; }
+function hbSet(el, html, tip){ if(!el) return; el.innerHTML = html; if(tip!=null) el.title = tip; }
 function refreshHeartbeatStatus(manual){
   const el=document.getElementById("hbStatus"); if(!el) return;
   const c=cloudCfg();
-  if(!c||!c.enabled||!c.url||!c.anon){ hbSet(el,"云端同步未启用，此处不显示保活状态（心跳仍按计划写入其配置的项目）"); return; }
-  hbSet(el,"查询心跳中…");
+  if(!c||!c.enabled||!c.url||!c.anon){ hbSet(el,'<span style="cursor:default">心跳：云端同步未启用</span>'); return; }
+  hbSet(el,"心跳：查询中…");
   fetch(c.url+"/rest/v1/gridtrader_heartbeat?select=ts&order=ts.desc&limit=1",
         {headers:{"apikey":c.anon,"Authorization":"Bearer "+c.anon}})
   .then(r=>{
-    if(r.status===404){ hbSet(el,'<span style="color:#B4552E">● 未安装</span> · 心跳表不存在（尚未执行 supabase_keepalive.sql），保活尚未生效'); return null; }
+    if(r.status===404){ hbSet(el,'<span style="color:#B4552E">● 心跳未安装</span>',"尚未在 Supabase 执行 supabase_keepalive.sql，保活尚未生效"); return null; }
     if(!r.ok) throw new Error("HTTP "+r.status);
     return r.json();
   })
   .then(rows=>{
     if(!rows) return;
-    if(!rows.length){ hbSet(el,"尚无心跳记录 · 等待 GitHub Actions 首轮运行（每日 07:00/23:00）"); return; }
+    if(!rows.length){ hbSet(el,"心跳：等待首轮","等待 GitHub Actions 首轮运行（每日 07:00/23:00）"); return; }
     const last=new Date(rows[0].ts), hrs=(Date.now()-last.getTime())/36e5;
     const when=last.toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false});
     const ago= hrs<1? Math.round(hrs*60)+" 分钟前" : hrs<48? Math.round(hrs)+" 小时前" : Math.round(hrs/24)+" 天前";
+    const base="GitHub Actions 每日 07:00 / 23:00（北京）自动写入心跳表，防止免费档 7 天无 API 活动被暂停。最近心跳："+when+"（"+ago+"）。";
     if(hrs<30){
-      hbSet(el,'<span style="color:#1E8E5A">● 正常</span> · 最近心跳 <b>'+when+'</b>（'+ago+'）· 每日 07:00/23:00 自动写入，免费库不会因闲置被暂停');
+      hbSet(el,'<span style="color:#1E8E5A">● 心跳正常</span> '+ago, base);
     }else{
-      hbSet(el,'<span style="color:#C0392B">● 已停跳</span> · 最近心跳 <b>'+when+'</b>（'+ago+'）· 7 天无活动免费库会被暂停，请到 Supabase 后台恢复项目，并到仓库 Actions 检查 supabase-keepalive 是否在报错');
+      hbSet(el,'<span style="color:#C0392B">● 心跳停跳</span> '+ago, base+" 已停跳，免费库 7 天无活动会被暂停——请到 Supabase 后台恢复项目，并到仓库 Actions 检查 supabase-keepalive 是否在报错。");
     }
   })
   .catch(e=>{
-    hbSet(el,'<span style="color:#B4552E">心跳查询失败</span>（'+e.message+'）· 不影响心跳本身照常写入');
+    hbSet(el,'<span style="color:#B4552E">心跳查询失败</span>',"查询失败（"+e.message+"），不影响心跳本身照常写入。");
     if(manual) toast("保活状态查询失败："+e.message);
   });
 }
@@ -5169,7 +5174,6 @@ function refreshHeartbeatStatus(manual){
 function renderCloudPanel(){
   let c=null; try{ c=JSON.parse(localStorage.getItem(KEY_CLOUD)||"null"); }catch(e){}
   const status = c&&c.enabled ? ("已启用"+(c.lastSync? " · 上次同步 "+c.lastSync : " · 尚未同步")) : "未启用（当前为纯本地模式）";
-  setTimeout(()=>refreshHeartbeatStatus(),50);   // 面板渲染后自动查询心跳（注意：必须在 return 之前，return 后的语句不会执行）
   return `<section class="section">
     <div class="lab"><span class="t">云端同步</span><span>手机/电脑自动同步 · 行情云端代理</span></div>
     <div class="card"><div class="card-body">
@@ -5185,13 +5189,6 @@ function renderCloudPanel(){
         <span style="color:var(--muted);font-size:12px">${status}</span>
       </div>
       <div class="note">已启用云端同步：交易自动上传、多端同步、行情走云端代理。</div>
-      <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <span style="font-size:12px;color:var(--muted)">数据库保活（防免费档 7 天无活动被暂停）</span>
-          <button class="btn ghost" onclick="refreshHeartbeatStatus(true)">刷新状态</button>
-        </div>
-        <div id="hbStatus" style="font-size:12px;margin-top:4px;color:var(--muted)">加载中…</div>
-      </div>
       <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
         <div style="font-size:12px;color:var(--muted);margin-bottom:4px">数据备份与恢复（每天自动快照，收盘后约 15:30 强制生成当日最终态，滚动保留 60 天）</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
