@@ -7337,10 +7337,12 @@ function autoGridMonitor(){
       // 逐交易日拉分时（今天用实时接口；历史日用带日期的东财接口补录）
       return Promise.all(dates.map(theDate=>{
         const p = (theDate===today)? fetchIntraday(g.meta.code) : fetchIntradayEMDate(g.meta.code, theDate);
-        return p.then(bars=>({theDate, bars})).catch(()=>({theDate, bars:[]}));
+        return p.then(bars=>({theDate, bars})).catch(()=>({theDate, bars:[], failed:true}));
       })).then(dayList=>{
+        let todayFailed=false;
         const addedAll=[], touchedAll=0, cappedGrids=[];
-        for(const {theDate, bars} of dayList){
+        for(const {theDate, bars, failed} of dayList){
+          if(failed && theDate===today) todayFailed=true;
           if(!(bars && bars.length)) continue;
           /* 校验并清洗分时：
              ① 数据日期必须 = 该交易日；② 剔除 close 非正/非有限 的占位K线（防 2026-09-14 几何级数假成交） */
@@ -7446,12 +7448,18 @@ function autoGridMonitor(){
           if(touched.length) touchedAll += touched.length;
           if(capped) cappedGrids.push(g.meta.name);
         }
-        if(addedAll.length || cappedGrids.length){ g._sample=false; return {g, addedAll, touched:touchedAll, cappedGrids}; }
+        if(addedAll.length || cappedGrids.length || todayFailed){ g._sample=false; return {g, addedAll, touched:touchedAll, cappedGrids, todayFailed}; }
         return null;
       });
     }).catch(()=>null);
   })).then(results=>{
     const logged = results.filter(Boolean);
+    /* 分时拉取失败的提示（节流：10 分钟最多一次）——静默跳过会让用户误以为"没触发"，其实是"没扫到" */
+    const failedNames = logged.filter(r=>r.todayFailed).map(r=>r.g.meta.name);
+    if(failedNames.length && Date.now()-(window.__autoFailToastAt||0) > 10*60*1000){
+      window.__autoFailToastAt = Date.now();
+      toast(`⚠「${failedNames.join("、")}」今日分时获取失败，本轮巡检跳过——行情源不稳定时请稍后点「立即巡检」重试，以免漏录`);
+    }
     if(!logged.length) return;
     save(); render();
     logged.forEach(({g,addedAll,touched,cappedGrids})=>{
