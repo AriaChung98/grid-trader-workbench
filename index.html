@@ -1940,9 +1940,18 @@ function gridTriggerStatus(g, cur){
   const c=g.cond.params;
   const {base,buyNext,sellNext}=nextTriggerLines(c, g.trades, cur);
   const EPS=1e-9;
+  /* 价格带钳制（与 autoGridMonitor 同口径，2026-10-13）：买线低于下轨 base×(1−sp)^downGrids、
+     卖线高于上轨 base×(1+sp)^upGrids 时该侧不可成交——穿轨后（如跌破下轨、买格用尽）不再提示
+     "请及时录入"，否则状态栏会一直挂录入提示，与自动巡检的止步行为自相矛盾。 */
+  const sp=+c.spacingPct||0;
+  const bp=+c.basePrice||0;
+  const loBound=bp*Math.pow(1-sp, Math.max(0,+c.downGrids||0));
+  const hiBound=bp*Math.pow(1+sp, Math.max(0,+c.upGrids||0));
+  const buyOk  = buyNext  >= loBound-EPS;   // 买线仍在带内（恰在下轨=最后一级有效买点）
+  const sellOk = sellNext <= hiBound+EPS;   // 卖线仍在带内
   const sides=[];
-  if(cur <= buyNext+EPS) sides.push('buy');
-  if(cur >= sellNext-EPS) sides.push('sell');
+  if(buyOk  && cur <= buyNext+EPS) sides.push('buy');
+  if(sellOk && cur >= sellNext-EPS) sides.push('sell');
   return {triggered:sides.length>0, sides, side:sides[0]||null, buyNext, sellNext, base};
 }
 
