@@ -1161,6 +1161,18 @@ function renderDeviceLog(){
       }).join("");
     }).catch(e=>{ el.innerHTML='<span style="color:var(--muted)">设备记录查询失败（'+e.message+'）</span>'; });
 }
+/* 编辑云端连接信息：输入框默认只读（防误触改错凭证导致同步指向错误项目），
+   点「编辑连接信息」→ 二次确认后才解锁；解锁后须点「保存并测试连接」生效。 */
+function editCloudConn(){
+  confirmModal("编辑云端连接信息",
+    "修改项目地址或 Anon Key 会改变数据同步的目标项目，可能导致读不到现有网格/交易数据。<br>确认要解除只读、手动修改吗？（修改后需点「保存并测试连接」生效）",
+    ()=>{
+      const u=$("cloud_url"), a=$("cloud_anon");
+      if(u) u.readOnly=false; if(a) a.readOnly=false;
+      if(u) u.focus();
+      toast("已解锁编辑，修改后请点「保存并测试连接」");
+    });
+}
 /* 上传整份状态到 Supabase 表 gridtrader（id 固定 'app'，按 updated_at 最后写入胜出） */
 let _genBlockToastAt=0;   // 代数锁拦截 toast 的上次时间（10 分钟节流）
 function cloudPush(showToast, force){
@@ -5315,11 +5327,12 @@ function renderCloudPanel(){
     <div class="lab"><span class="t">云端同步</span><span>手机/电脑自动同步 · 行情云端代理</span></div>
     <div class="card"><div class="card-body">
       <div class="row trade-row">
-        <div class="fld"><label>Supabase 项目地址</label><input id="cloud_url" placeholder="https://xxxx.supabase.co" value="${c&&c.url?c.url:""}"></div>
-        <div class="fld"><label>Anon Key（公开，非私密）</label><input id="cloud_anon" placeholder="eyJhbGci..." value="${c&&c.anon?c.anon:""}"></div>
+        <div class="fld"><label>Supabase 项目地址</label><input id="cloud_url" readonly placeholder="https://xxxx.supabase.co" value="${c&&c.url?c.url:""}"></div>
+        <div class="fld"><label>Anon Key（公开，非私密）</label><input id="cloud_anon" readonly placeholder="eyJhbGci..." value="${c&&c.anon?c.anon:""}"></div>
       </div>
       <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap">
         <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="cloud_on" ${c&&c.enabled?"checked":""}> 启用云端同步</label>
+        <button class="btn ghost" onclick="editCloudConn()">编辑连接信息</button>
         <button class="btn" onclick="saveCloudCfg()">保存并测试连接</button>
         <button class="btn primary" onclick="cloudPushCurrent()">上传目前数据至云端</button>
         <button class="btn ghost" onclick="cloudPullManual()">立即拉取云端</button>
