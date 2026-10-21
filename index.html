@@ -1076,6 +1076,7 @@ function cfetch(url, opts, tries){
   });
 }
 /* 上传整份状态到 Supabase 表 gridtrader（id 固定 'app'，按 updated_at 最后写入胜出） */
+let _genBlockToastAt=0;   // 代数锁拦截 toast 的上次时间（10 分钟节流）
 function cloudPush(showToast, force){
   const c=cloudCfg(); if(!c) return Promise.resolve(false);
   if(state._pristine){ console.warn("跳过云端上传：当前为默认演示数据，避免覆盖云端真实数据"); return Promise.resolve(false); }
@@ -1090,7 +1091,9 @@ function cloudPush(showToast, force){
   const pushState = (state.grids && state.grids.some(g=>g._noCloudSync))
     ? Object.assign({}, state, { grids: state.grids.filter(g=>!g._noCloudSync) })
     : state;
+  let nextGen = (+state._gen||0)+1;   // 默认按本机已知代数+1（GET 失败的 force 路径兜底用）
   const doPost = ()=>{
+    try{ pushState._gen=nextGen; state._gen=nextGen; saveLocal(); }catch(e){}
     const body=JSON.stringify([{ id:"app", data:pushState, updated_at:now }]);
     return cfetch(`${c.url}/rest/v1/gridtrader?on_conflict=id`, {
       method:"POST", headers:Object.assign(cloudHeaders(),{ "Prefer":"resolution=merge-duplicates" }), body
@@ -1099,32 +1102,56 @@ function cloudPush(showToast, force){
       return true; })
      .catch(err=>{ if(showToast) toast("云端同步失败："+err.message); return false; });
   };
-  // PUSH 端保护（对称于 cloudPull 保护 D）：先比对云端当前网格/组合数与时间戳，
-  // 若本机(去测试网格后)数据量少于云端、或本机状态比云端更旧，则禁止覆盖推送，
-  // 避免陈旧/残缺本机把云端完整数据回退成更少数据（多设备不同步的"好数据被吞"路径）。
-  // force=true（手动"上传到云端"）可绕过，用于用户明确要以本机覆盖云端时。
+  // PUSH 端保护（对称于 cloudPull 保护 D）：先比对云端当前状态，三类检查全过才允许覆盖推送。
+  // ① 数量保护：本机(去测试网格后)网格/组合数少于云端 → 禁止（防陈旧残缺本机吞掉云端完整数据）。
+  // ② 代数锁（2026-10-21 事故根治）：云端 data._gen 为递增代数，每台设备记住自己最后见到的
+  //    代数（state._gen，随数据存储/拉取同步更新）。云端代数已被其他设备推进而本机没跟上 →
+  //    本机必是陈旧视图，无论数据量多大、_savedAt 多新都禁止覆盖。此前的数量/时间戳保护被
+  //    穿透（旧数据网格更多、_savedAt 每次保存刷新成当下），导致另一台设备的 9 月旧结构
+  //    数据把云端正确数据整个回退——代数锁从机制上堵死该路径。
+  // ③ 时间戳保护：本机 _savedAt 早于云端且数量不占优 → 禁止（次要信号，保留）。
+  // force=true（手动"上传到云端"）可绕过①②③，用于用户明确要以本机覆盖云端时。
   return cfetch(`${c.url}/rest/v1/gridtrader?id=eq.app&select=id,data,updated_at`, { headers:cloudHeaders() }, 2)
-    .then(r=>{ if(!r.ok) return null; return r.json(); })
+    .then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
     .then(rows=>{
-      if(!force && rows && rows[0] && rows[0].data && Array.isArray(rows[0].data.grids)){
+      if(rows && rows[0] && rows[0].data && Array.isArray(rows[0].data.grids)){
         const cd=rows[0].data;
-        const cG=(cd.grids||[]).length, cP=(cd.portfolios||[]).length;
-        const lG=(pushState.grids||[]).length, lP=(pushState.portfolios||[]).length;
-        if(cG>0 && (lG < cG || lP < cP)){
-          console.warn("推送被阻止：本机(去测试网格后)网格/组合数少于云端（本机 "+lG+"/"+lP+" vs 云端 "+cG+"/"+cP+"），避免覆盖丢失云端数据");
-          if(showToast) toast("推送跳过：本机数据少于云端，请先「立即拉取云端」再修改");
-          return false;
+        const cloudGen=+cd._gen||0;
+        if(!force){
+          const cG=(cd.grids||[]).length, cP=(cd.portfolios||[]).length;
+          const lG=(pushState.grids||[]).length, lP=(pushState.portfolios||[]).length;
+          if(cG>0 && (lG < cG || lP < cP)){
+            console.warn("推送被阻止：本机(去测试网格后)网格/组合数少于云端（本机 "+lG+"/"+lP+" vs 云端 "+cG+"/"+cP+"），避免覆盖丢失云端数据");
+            if(showToast) toast("推送跳过：本机数据少于云端，请先「立即拉取云端」再修改");
+            return false;
+          }
+          const myGen=+state._gen||0;
+          if(cloudGen!==myGen){
+            console.warn("推送被阻止：云端代数("+cloudGen+")与本机已知("+myGen+")不一致，本机为陈旧视图，禁止覆盖");
+            if(showToast && Date.now()-(_genBlockToastAt||0) > 10*60*1000){   // 自动巡检每分钟触发 save，toast 节流 10 分钟
+              _genBlockToastAt=Date.now();
+              toast("推送跳过：云端已被其他设备更新（本机为旧版本数据），请先「立即拉取云端」核对");
+            }
+            return false;
+          }
+          const cTs=rows[0].updated_at, lTs=state._savedAt;
+          if(cTs && lTs && tsMs(lTs) < tsMs(cTs) && lG <= cG && lP <= cP){
+            console.warn("推送被阻止：本机状态比云端更旧（本机 "+lTs+" < 云端 "+cTs+"），避免陈旧数据覆盖云端");
+            if(showToast) toast("推送跳过：本机数据比云端旧，请先「立即拉取云端」再修改");
+            return false;
+          }
         }
-        const cTs=rows[0].updated_at, lTs=state._savedAt;
-        if(cTs && lTs && tsMs(lTs) < tsMs(cTs) && lG <= cG && lP <= cP){
-          console.warn("推送被阻止：本机状态比云端更旧（本机 "+lTs+" < 云端 "+cTs+"），避免陈旧数据覆盖云端");
-          if(showToast) toast("推送跳过：本机数据比云端旧，请先「立即拉取云端」再修改");
-          return false;
-        }
+        nextGen=cloudGen+1;   // 无论是否 force，成功推送都把云端代数推进一格
       }
       return doPost();
     })
-    .catch(()=> doPost());   // 读取云端失败时不阻断推送（瞬时网络错误不应卡住同步）
+    .catch(err=>{
+      /* 云端读取失败时不再盲目直推（旧逻辑 .catch(()=>doPost()) 正是陈旧设备绕过全部
+         保护的旁路）。非强制推送一律跳过，等下次 save 自动重试；force 保留（用户明确意图）。 */
+      console.warn("推送跳过：云端状态读取失败", err);
+      if(showToast && !force) toast("推送跳过：云端状态读取失败，稍后修改数据时会自动重试");
+      return force? doPost() : false;
+    });
 }
 function saveLocal(){
   try{ state._savedAt = new Date().toISOString(); localStorage.setItem(KEY_STATE, JSON.stringify(state)); }catch(e){}
