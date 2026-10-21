@@ -988,7 +988,7 @@ function ensureTestGrid(){
           ex.cond.params.targetBaseCost=nf.cond.params.targetBaseCost;
           recalcDerived(ex.cond.params, (ex.market? ex.market.kline : ex.pricePath));  // 重算持仓上下限
           try{ localStorage.setItem(keyLocal, JSON.stringify(ex)); }catch(e){}
-          try{ save(); }catch(e){}                           // 持久化修正到主存档(KEY_STATE)
+          try{ saveAuto(); }catch(e){}                        // 持久化修正到主存档(KEY_STATE)（自动修复不计为真实改动）
         }
         return;
       }
@@ -1041,11 +1041,20 @@ function load(){
 }
 function save(){
   state._pristine=false;   // 用户主动保存即视为真实数据，允许同步
-  try{ state._savedAt = new Date().toISOString(); localStorage.setItem(KEY_STATE, JSON.stringify(state)); }
+  try{ const now=new Date().toISOString(); state._savedAt=now; state._editAt=now; localStorage.setItem(KEY_STATE, JSON.stringify(state)); }
   catch(e){ alert("保存失败："+e.message); return; }
   cloudPush(true);    // 异步同步到云端，成功/失败均提示
   persistTestGrid();  // 测试网格（含自动录入成交）持久化到本机，避免跨刷新重复录入
   maybeSnapshot();    // 满足间隔则自动生成当日云端快照（每天一份，60天滚动）
+}
+/* 自动刷新专用落盘（行情刷新/自愈修复/时间回填/向导行情获取）：
+   同步到云端、但不推进 _editAt —— _editAt 只记「用户操作/巡检成交」这类真实改动，
+   用于多设备分叉时判断本机是否持有更新的数据（新数据优先的依据）。 */
+function saveAuto(){
+  state._pristine=false;
+  try{ state._savedAt=new Date().toISOString(); localStorage.setItem(KEY_STATE, JSON.stringify(state)); }catch(e){}
+  cloudPush(false);
+  persistTestGrid();
 }
 
 /* ============ 云端同步（Supabase 免费版：无需绑卡，长期免费） ============ */
@@ -1075,6 +1084,83 @@ function cfetch(url, opts, tries){
     throw err;
   });
 }
+/* ============ 多设备分叉裁决 + 设备打开记录 ============
+   分叉：gen 不匹配且本机在上次同步之后有真实改动（_editAt > _syncAt）。
+   不做自动合并——删除操作无法用并集表达（并集会复活旧网格，正是污染形态），
+   由用户按两侧最后改动时间选择保留哪一侧（即「新数据优先」的人工裁决）。 */
+let _syncConflictSig="";
+function syncFmtT(s){ try{ return new Date(+s||s).toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}); }catch(e){ return String(s||"—"); } }
+function showSyncConflictModal(cloudGen){
+  const m=$("modal"); if(!m || m.classList.contains("show")) return;
+  const myGen=+state._gen||0;
+  const sig=cloudGen+"|"+myGen;                 // 不含 _editAt：同一次分叉只弹一次，避免自动巡检反复打扰
+  if(_syncConflictSig===sig) return;
+  _syncConflictSig=sig;
+  const lg=(state.grids||[]).length, lp=(state.portfolios||[]).length;
+  let trN=0, lastT="";
+  (state.grids||[]).forEach(g=>{ (g.trades||[]).forEach(t=>{ trN++; const d=String(t.date||"")+" "+String(t.time||""); if(d>lastT) lastT=d; }); });
+  $("mTitle").textContent="检测到多设备数据分叉";
+  $("mBody").innerHTML='<div class="note" style="text-align:left;line-height:1.7">'
+    +'其他设备已更新过云端数据（云端代数 <b>'+cloudGen+'</b>，本机已知 <b>'+myGen+'</b>）。<br>'
+    +'本机在上次同步之后有改动：<b>'+lg+'</b> 个网格 / <b>'+lp+'</b> 个组合 · 约 <b>'+trN+'</b> 笔成交'
+    +(lastT? ' · 最新成交 '+lastT : '')
+    +' · 本机最后改动 <b>'+syncFmtT(state._editAt)+'</b><br>'
+    +'请按两侧的改动时间选择保留哪一侧（较新的一方为准）：</div>'
+    +'<div style="display:flex;gap:8px;justify-content:center;margin-top:10px;flex-wrap:wrap">'
+    +'<button class="btn" onclick="resolveSyncConflict(\'local\')">以本机为准（覆盖云端）</button>'
+    +'<button class="btn ghost" onclick="resolveSyncConflict(\'cloud\')">以云端为准（放弃本机改动）</button></div>';
+  m.classList.add("show");
+  $("mOk").textContent="稍后再说";
+  $("mOk").onclick=()=>{ m.classList.remove("show"); };
+  $("mCancel").onclick=()=>{ m.classList.remove("show"); };
+}
+function resolveSyncConflict(side){
+  const m=$("modal"); m.classList.remove("show");
+  if(side==="local"){ cloudPush(true,true); }
+  else { cloudPull(true).then(()=>{ toast("已采用云端数据，本机改动已放弃"); }); }
+}
+/* 设备打开记录：复用 gridtrader_heartbeat 表（note=visit|设备ID|标签，30 天随心跳滚动清理），
+   用于回答「哪些设备打开过工作台」——多设备数据分叉/污染时可定位来源。 */
+const KEY_DEVID=LS+"devid";
+function deviceInfo(){
+  let id=""; try{ id=localStorage.getItem(KEY_DEVID)||""; }catch(e){}
+  if(!id){ id="d"+Math.random().toString(36).slice(2,8)+Date.now().toString(36).slice(-4); try{ localStorage.setItem(KEY_DEVID,id); }catch(e){} }
+  const pf=(navigator.platform||"").replace(/^Win/,"Windows").replace(/^Mac/,"macOS")||"未知系统";
+  const ua=navigator.userAgent||"";
+  const br=/Edg\//.test(ua)?"Edge":/Chrome\//.test(ua)?"Chrome":/Firefox\//.test(ua)?"Firefox":/Safari\//.test(ua)?"Safari":"浏览器";
+  return {id, label:pf+" · "+br};
+}
+function recordDeviceVisit(){
+  const c=cloudCfg(); if(!c) return;
+  const d=deviceInfo();
+  cfetch(`${c.url}/rest/v1/gridtrader_heartbeat?select=ts,note&order=ts.desc&limit=30`,{headers:cloudHeaders()},2)
+    .then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+    .then(rows=>{
+      const mine=(rows||[]).filter(x=>String(x.note||"").startsWith("visit|"+d.id+"|"));
+      if(mine.length && (Date.now()-new Date(mine[0].ts).getTime())<60*60*1000) return;   // 同设备 1 小时去重
+      return cfetch(`${c.url}/rest/v1/gridtrader_heartbeat`,{method:"POST",headers:cloudHeaders(),
+        body:JSON.stringify([{ts:new Date().toISOString(), note:"visit|"+d.id+"|"+d.label}])},2);
+    }).catch(()=>{});
+}
+function renderDeviceLog(){
+  const el=$("devLogBox"); if(!el) return;
+  const c=cloudCfg(); if(!c){ el.innerHTML='<span style="color:var(--muted)">云端同步未启用，不记录设备</span>'; return; }
+  el.innerHTML='<span style="color:var(--muted)">查询中…</span>';
+  cfetch(`${c.url}/rest/v1/gridtrader_heartbeat?select=ts,note&order=ts.desc&limit=40`,{headers:cloudHeaders()},2)
+    .then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+    .then(rows=>{
+      const visits=(rows||[]).map(x=>{ const n=String(x.note||""); if(!n.startsWith("visit|")) return null;
+        const p=n.split("|"); return {ts:x.ts, id:p[1]||"", label:p[2]||"未知设备"}; }).filter(Boolean).slice(0,12);
+      if(!visits.length){ el.innerHTML='<span style="color:var(--muted)">暂无记录（各设备打开工作台约 1 分钟后会出现）</span>'; return; }
+      const me=deviceInfo().id;
+      el.innerHTML=visits.map(v=>{
+        const t=syncFmtT(v.ts);
+        return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:2px 0">'
+          +'<span>'+(v.id===me? "<b>"+esc(v.label)+"</b>（本机）" : esc(v.label))+'</span>'
+          +'<span style="color:var(--muted)">'+t+'</span></div>';
+      }).join("");
+    }).catch(e=>{ el.innerHTML='<span style="color:var(--muted)">设备记录查询失败（'+e.message+'）</span>'; });
+}
 /* 上传整份状态到 Supabase 表 gridtrader（id 固定 'app'，按 updated_at 最后写入胜出） */
 let _genBlockToastAt=0;   // 代数锁拦截 toast 的上次时间（10 分钟节流）
 function cloudPush(showToast, force){
@@ -1093,7 +1179,11 @@ function cloudPush(showToast, force){
     : state;
   let nextGen = (+state._gen||0)+1;   // 默认按本机已知代数+1（GET 失败的 force 路径兜底用）
   const doPost = ()=>{
-    try{ pushState._gen=nextGen; state._gen=nextGen; saveLocal(); }catch(e){}
+    try{
+      pushState._gen=nextGen; state._gen=nextGen;
+      const now2=Date.now(); state._syncAt=now2; state._editAt=now2;   // 推送成功=本机内容已与云端一致，重置分叉检测基准
+      saveLocal();
+    }catch(e){}
     const body=JSON.stringify([{ id:"app", data:pushState, updated_at:now }]);
     return cfetch(`${c.url}/rest/v1/gridtrader?on_conflict=id`, {
       method:"POST", headers:Object.assign(cloudHeaders(),{ "Prefer":"resolution=merge-duplicates" }), body
@@ -1127,10 +1217,19 @@ function cloudPush(showToast, force){
           }
           const myGen=+state._gen||0;
           if(cloudGen!==myGen){
-            console.warn("推送被阻止：云端代数("+cloudGen+")与本机已知("+myGen+")不一致，本机为陈旧视图，禁止覆盖");
-            if(showToast && Date.now()-(_genBlockToastAt||0) > 10*60*1000){   // 自动巡检每分钟触发 save，toast 节流 10 分钟
-              _genBlockToastAt=Date.now();
-              toast("推送跳过：云端已被其他设备更新（本机为旧版本数据），请先「立即拉取云端」核对");
+            const edited=+state._editAt||0, synced=+state._syncAt||0;
+            if(edited > synced+1000){
+              /* 本机在最后一次同步之后有真实改动（用户操作/巡检成交）→ 数据分叉而非陈旧镜像。
+                 「新数据优先」交给用户按两侧最后改动时间裁决（自动合并无法表达删除，贸然并集
+                 会复活旧网格——正是本次污染形态），故弹分叉选择框。 */
+              console.warn("推送暂停：数据分叉（云端代数 "+cloudGen+" vs 本机 "+myGen+"，本机有未同步改动）");
+              if(showToast) showSyncConflictModal(cloudGen);
+            }else{
+              console.warn("推送被阻止：云端代数("+cloudGen+")与本机已知("+myGen+")不一致，本机为陈旧视图，禁止覆盖");
+              if(showToast && Date.now()-(_genBlockToastAt||0) > 10*60*1000){   // 自动巡检每分钟触发 save，toast 节流 10 分钟
+                _genBlockToastAt=Date.now();
+                toast("推送跳过：云端已被其他设备更新（本机为旧版本数据），请先「立即拉取云端」核对");
+              }
             }
             return false;
           }
@@ -1188,7 +1287,8 @@ function cloudPull(force){
       // 覆盖前：把当前本地状态留一份备份，可一键回滚
       try{ localStorage.setItem(KEY_STATE_BAK, JSON.stringify(Object.assign({}, state, {_bakAt:new Date().toISOString()}))); }catch(e){}
       state=row.data; state._pristine=false;
-      saveLocal(); render();
+      try{ const now2=Date.now(); state._syncAt=now2; state._editAt=now2; saveLocal(); }catch(e){}
+      render();
       toast((selfHeal? "检测到本机为空，已自动从云端恢复 · " : "已从云端同步 · ")+(state.grids?state.grids.length:0)+" 个网格 / "+(state.portfolios?state.portfolios.length:0)+" 个组合"); return true;
     }).catch(err=>{ console.warn("云端拉取失败：",err); return false; });
 }
@@ -2038,7 +2138,7 @@ function quickRecordTrigger(gid){
         return info.side==='buy'? (lo<=rec.trigger+EPS) : (hi>=rec.trigger-EPS);
       });
       const t=hit? normBarTime(hit.t) : null;
-      if(t && t!==rec.time){ rec.time=t; save(); render(); }
+      if(t && t!==rec.time){ rec.time=t; saveAuto(); render(); }
     }).catch(()=>{});
   }
 }
@@ -5210,6 +5310,7 @@ function refreshHeartbeatStatus(manual){
 function renderCloudPanel(){
   let c=null; try{ c=JSON.parse(localStorage.getItem(KEY_CLOUD)||"null"); }catch(e){}
   const status = c&&c.enabled ? ("已启用"+(c.lastSync? " · 上次同步 "+c.lastSync : " · 尚未同步")) : "未启用（当前为纯本地模式）";
+  setTimeout(()=>renderDeviceLog(),80);   // 渲染后自动查询设备记录（必须在 return 之前）
   return `<section class="section">
     <div class="lab"><span class="t">云端同步</span><span>手机/电脑自动同步 · 行情云端代理</span></div>
     <div class="card"><div class="card-body">
@@ -5225,6 +5326,13 @@ function renderCloudPanel(){
         <span style="color:var(--muted);font-size:12px">${status}</span>
       </div>
       <div class="note">已启用云端同步：交易自动上传、多端同步、行情走云端代理。</div>
+      <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <span style="font-size:12px;color:var(--muted)">设备打开记录（近 30 天 · 定位多设备分叉来源）</span>
+          <button class="btn ghost" onclick="renderDeviceLog()">刷新</button>
+        </div>
+        <div id="devLogBox" style="margin-top:4px">加载中…</div>
+      </div>
       <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
         <div style="font-size:12px;color:var(--muted);margin-bottom:4px">数据备份与恢复（每天自动快照，收盘后约 15:30 强制生成当日最终态，滚动保留 60 天）</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -6738,7 +6846,7 @@ function newFetch(e){
     state.creating.draftCond._autoQty=true; state.creating.draftCond._autoBase=true;
     blankCondMoney(state.creating.draftCond);   // 新增条件单不预填初始资金/每笔数量
     state.creating.step="review";
-    save(); render();
+    saveAuto(); render();
   }).catch(err=>{
     // 离线兜底
     const rec=recommend(null, null);
@@ -6749,7 +6857,7 @@ function newFetch(e){
     state.creating.draftCond._autoQty=true; state.creating.draftCond._autoBase=true;
     blankCondMoney(state.creating.draftCond);   // 新增条件单不预填初始资金/每笔数量
     state.creating.step="review";
-    save(); render();
+    saveAuto(); render();
     toast("行情获取失败，已用占位推荐，可手动填写");
   });
   return false;
@@ -6763,7 +6871,7 @@ function reFetchNew(){
     state.creating.draftCond=Object.assign({}, state.creating.recommend, _prevDC, {currentPrice:round(m.price,3)});
     if(!(_prevDC.initCapital>0)) state.creating.draftCond.initCapital=undefined;   // 用户未填过则保持空（不预填）
     if(!(_prevDC.qtyPerTrade>0)) state.creating.draftCond.qtyPerTrade=undefined;
-    save(); render(); toast("行情已更新");
+    saveAuto(); render(); toast("行情已更新");
   }).catch(()=> toast("重新获取失败"));
 }
 function confirmNew(){
@@ -7134,7 +7242,7 @@ function refreshAllPrices(silent){
     })
   )).then(results=>{
     overviewRefreshing=false;
-    save(); render();
+    saveAuto(); render();
     const ok=results.filter(r=>r.ok), fail=results.filter(r=>!r.ok);
     const synced=ok.reduce((s,r)=>s+(r.synced||0),0);
     if(fail.length){
@@ -7567,6 +7675,7 @@ render();
 try{ if(!localStorage.getItem(KEY_CLOUD)){ setCloudCfg(DEFAULT_CLOUD); } }catch(e){}
 // 打开时先从云端拉取最新数据（若已启用云端同步）；仅拉取、不回推，避免用空白/默认本地状态覆盖云端
 if(cloudCfg()){
+  setTimeout(()=>recordDeviceVisit(), 4000);   // 设备打开记录（与保活心跳同表，30 天滚动）
   cloudPull().finally(()=>{
     // 拉取后：把本机已 dismiss 的测试网格 id 合并进 state.dismissedTests（兼容旧版仅存本地的标记），
     // 若确有新增则静默回推云端，使"删除测试网格"在手机/电脑多端一致生效
