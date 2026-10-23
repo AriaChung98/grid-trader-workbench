@@ -204,17 +204,17 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .ac-grand{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink)}
 .ac-list{display:flex;flex-direction:column;gap:10px}
 .ac-item{display:flex;flex-direction:column;gap:5px;min-width:0;border:1px solid var(--line);border-radius:8px;padding:9px 11px;background:var(--surface)}
-.ac-top{display:flex;align-items:center;gap:10px;min-width:0}
+.ac-top{display:flex;align-items:baseline;gap:10px;min-width:0}
 .ac-nm{flex:1 1 auto;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
-.ac-bar{display:flex;height:10px;border-radius:2px;overflow:hidden;background:var(--line);flex:0 0 auto;position:relative}
-.ac-bar .mv{background:#5C93DC}
-.ac-bar .csh{background:#C7DBF5}
+.ac-val{text-align:right;flex:0 0 auto}
+.ac-val b{font-size:14px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums}
+.ac-val i{display:block;font-style:normal;font-size:10px;color:var(--muted);margin-top:1px;font-weight:400}
 /* 网格档位尺（成员卡片内，固定宽度）：以基准为界，下方绿（跌）上方红（涨），仿标的页红涨绿跌 */
 .ac-gridrow{display:flex;align-items:flex-end;gap:8px;margin-top:4px}
 .ag-side{flex:0 0 auto;width:50px;text-align:center}
 .ag-side .cap{display:block;font-size:9px;color:var(--muted);letter-spacing:.08em;margin-bottom:1px}
 .ag-side b{font-size:10px;color:var(--ink);font-weight:500;font-variant-numeric:tabular-nums}
-.ag-railwrap{flex:0 0 auto;width:360px}
+.ag-railwrap{flex:1 1 auto;min-width:300px}
 .ag-rail{position:relative;height:20px;border-radius:4px;background:#F7F6F1;border:1px solid var(--line);overflow:hidden}
 .ag-cell{position:absolute;top:0;bottom:0}
 .ag-cell.lo{background:#E2F0E7}
@@ -233,9 +233,12 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .ag-price.hi{background:var(--up)}
 .ag-cap{margin-top:3px;font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
 .ag-cap b{color:var(--ink);font-weight:500}
-.ac-val{margin-left:8px;width:136px;text-align:right;font-size:11px;font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap;flex:0 0 auto}
-.ac-num{font-size:10.5px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;flex:0 0 auto}
-.ac-num b{color:var(--ink);font-weight:500}
+.ac-meta{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.ac-pos b{color:var(--ink);font-weight:500}
+.ac-hold{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.ac-hold b{color:var(--ink);font-weight:500}
+.ac-micro{display:inline-flex;width:44px;height:8px;border-radius:4px;overflow:hidden;background:#EDEBE4;flex:0 0 auto}
+.ac-micro .mv{background:#8A8578;height:100%}
 .ac-legend{display:flex;align-items:center;gap:16px;font-size:12px;color:var(--muted);flex-wrap:wrap}
 .ac-dot{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:middle}
 /* 资产构成 · 移动端可左右拖动查看（防窄屏裁切右侧¥值与占比） */
@@ -247,7 +250,7 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
   .ac-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;overflow-y:hidden;cursor:grab}
   .ac-scroll .ac-list{width:max-content;min-width:100%}
   .ac-scroll.grabbing{cursor:grabbing}
-  .ac-scroll.grabbing .ac-num,.ac-scroll.grabbing .ac-top{-webkit-user-select:none;user-select:none}
+  .ac-scroll.grabbing .ac-top{-webkit-user-select:none;user-select:none}
   .ac-hint{display:block;position:absolute;top:2px;right:6px;z-index:3;font-size:10.5px;color:var(--muted);background:rgba(255,255,255,.85);border:1px solid var(--line);border-radius:9px;padding:1px 8px;pointer-events:none;transition:opacity .3s;white-space:nowrap}
   .ac-compact.ac-scrolled .ac-hint{opacity:0}
   /* 组合详情 · 移动端全局收窄字号（KPI / 总览行 / 资产构成 / 成员行） */
@@ -264,11 +267,9 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
   /* 资产构成正文进一步收窄 */
   .ac-grand{font-size:14px}
   .ac-val{font-size:10.5px;width:120px}
-  .ac-num{font-size:10px}
-  .ac-nm{font-size:11.5px}
+    .ac-nm{font-size:11.5px}
   .ac-lbl{font-size:11px}
-  .ac-bar{height:8px}
-  .ac-item{gap:4px}
+    .ac-item{gap:4px}
   .ac-top{gap:8px}
   .card-body{padding:12px}
 }
@@ -6249,38 +6250,35 @@ function pfAssetsChartHTML(pf){
   if(freeCash>0) data.push({name:"未分配流动现金", mv:0, cash:freeCash, total:freeCash, isCash:true});
   const grand=data.reduce((a,x)=>a+x.total,0);
   if(grand<=0) return `<div class="empty">成员均为建仓阶段或未建仓，暂无资产可显示（持仓市值 + 现金 = 总资产）。</div>`;
-  const FULL_W=400;          // 整条轨道 = 组合总资产（100%），条长即占组合比例（拉长以放大每格，便于看清档位）
-  const MIN_W=3;             // 极小值保留可见细条，但不夸大（原 44px 下限会把 100 元画成 ~24%）
   const items=data.map(x=>{
     const share=grand>0? x.total/grand : 0;
-    const w=Math.max(MIN_W, Math.round(share*FULL_W));
     const pctTxt=pct(share,1);
     if(x.isCash){
       return `<div class="ac-item">
       <div class="ac-top">
         <span class="ac-nm" style="font-size:12px;color:var(--muted)">${esc(x.name)}</span>
-        <span class="ac-bar" style="width:${w}px"><i class="csh" style="width:100%"></i></span>
-        <span class="ac-val">¥${fmt(x.total,0)} · ${pctTxt}</span>
+        <span class="ac-val"><b>¥${fmt(x.total,0)}</b><i>占组合 ${pctTxt}</i></span>
       </div>
-      <div class="ac-num">流动现金（计划投入中未分配至任何标的）<b>¥${fmt(x.cash,0)}</b> · 持仓占比 <b>0%</b> · 占组合 <b>${pctTxt}</b></div>
+      <div class="ac-meta"><span class="ac-pos">流动现金（计划投入中未分配至任何标的）</span><span class="ac-hold"><i class="ac-micro"></i>现金 <b>¥${fmt(x.cash,0)}</b> · 100%</span></div>
     </div>`;
     }
     const mvp=x.total>0? x.mv/x.total*100 : 0;
-    const holdTxt=mvp>0? mvp.toFixed(1)+"%" : "0%";
+    const holdTxt=mvp>0? mvp.toFixed(0)+"%" : "0%";
+    const cashTxt=mvp<100? (100-mvp).toFixed(0)+"%" : "0%";
     const gp=gridPosInfo(x.g);
+    const holdHtml=`<span class="ac-hold"><i class="ac-micro"><i class="mv" style="width:${mvp}%"></i></i>持仓 <b>¥${fmt(x.mv,0)}</b> · ${holdTxt}　现金 <b>¥${fmt(x.cash,0)}</b> · ${cashTxt}</span>`;
     const railRow = gp? `<div class="ac-gridrow">
         <div class="ag-side"><span class="cap">下轨</span><b>${fmt(gp.lower,3)}</b></div>
         <div class="ag-railwrap"${gp.tip? ` title="${esc(gp.tip)}"`:""}>${gp.rail}</div>
         <div class="ag-side"><span class="cap">上轨</span><b>${fmt(gp.upper,3)}</b></div>
       </div>
-      <div class="ag-cap">现价 <b>¥${fmt(gp.cur,3)}</b> · 现处 <b>${gp.posTxt}</b>（第 ${gp.cell+1}/${gp.N} 格）· 基准 <b>¥${fmt(gp.base,3)}</b></div>` : "";
+      <div class="ac-meta"><span class="ac-pos">现价 <b>¥${fmt(gp.cur,3)}</b> · 现处 <b>${gp.posTxt}</b>（第 ${gp.cell+1}/${gp.N} 格）· 基准 <b>¥${fmt(gp.base,3)}</b></span>${holdHtml}</div>`
+      : `<div class="ac-meta"><span class="ac-pos">建仓阶段，暂无网格档位</span>${holdHtml}</div>`;
     return `<div class="ac-item">
       <div class="ac-top">
-        <span class="ac-nm" style="font-size:${fitFontSize(x.name,150,12)}px">${esc(x.name)}</span>
-        <span class="ac-bar" style="width:${w}px"><i class="mv" style="width:${mvp}%"></i><i class="csh" style="width:${100-mvp}%"></i></span>
-        <span class="ac-val">¥${fmt(x.total,0)} · ${pctTxt}</span>
+        <span class="ac-nm" style="font-size:${fitFontSize(x.name,220,12.5)}px">${esc(x.name)}</span>
+        <span class="ac-val"><b>¥${fmt(x.total,0)}</b><i>占组合 ${pctTxt}</i></span>
       </div>
-      <div class="ac-num">持仓市值 <b>¥${fmt(x.mv,0)}</b>（持仓占比 <b>${holdTxt}</b>）· 现有现金 <b>¥${fmt(x.cash,0)}</b> · 占组合 <b>${pctTxt}</b></div>
       ${railRow}
     </div>`;
   }).join("");
@@ -6289,7 +6287,7 @@ function pfAssetsChartHTML(pf){
       <div class="ac-sum"><span class="ac-lbl">资产构成 · 各成员持仓市值 + 现金${freeCash>0? "（含未分配流动现金 ¥"+fmt(freeCash,0)+"）":""}</span><span class="ac-grand">¥${fmt(grand,0)}</span></div>
       <div class="ac-scroll"><div class="ac-list">${items}</div></div>
       <div class="ac-hint">← 左右拖动查看完整内容 →</div>
-      <div class="ac-legend"><span><i class="ac-dot" style="background:#5C93DC"></i>持仓市值</span><span><i class="ac-dot" style="background:#C7DBF5"></i>现有现金</span><span style="color:var(--muted)">网格档位尺：绿=基准下方（跌）· 红=基准上方（涨）· 白针+价格牌 = 现价</span></div>
+      <div class="ac-legend"><span><i class="ac-dot" style="background:var(--down)"></i>基准下方（跌区）</span><span><i class="ac-dot" style="background:var(--up)"></i>基准上方（涨区）</span><span style="color:var(--muted)">白针+价格牌 = 现价 · 灰条 = 持仓/现金占比</span></div>
     </div>
   </div></div>`;
 }
