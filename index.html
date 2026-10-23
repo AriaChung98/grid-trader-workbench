@@ -209,11 +209,22 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .ac-bar{display:flex;height:10px;border-radius:2px;overflow:hidden;background:var(--line);flex:0 0 auto;position:relative}
 .ac-bar .mv{background:#5C93DC}
 .ac-bar .csh{background:#C7DBF5}
-/* 网格档位叠加层（画在持仓+现金条本体上，不另开图表） */
-.ac-bar .gc{position:absolute;top:0;bottom:0;background:rgba(15,44,97,.16)}
-.ac-bar .gk{position:absolute;top:0;bottom:0;width:1px;background:rgba(15,44,97,.32)}
-.ac-bar .gk.base{width:1.5px;background:rgba(15,44,97,.66)}
-.ac-bar .gm{position:absolute;top:0;bottom:0;width:2px;background:#FFFFFF;box-shadow:0 0 0 1px rgba(15,44,97,.95)}
+/* 网格档位尺（独立一行，通宽）：左下轨 → 右上轨，钢琴键格纹 + 基准刻度 + 现价针与价格牌 */
+.ac-gridrow{display:flex;align-items:flex-end;gap:8px;margin-top:4px}
+.ag-side{flex:0 0 auto;width:52px;text-align:center}
+.ag-side .cap{display:block;font-size:9px;color:var(--muted);letter-spacing:.08em;margin-bottom:1px}
+.ag-side b{font-size:10px;color:var(--ink);font-weight:500;font-variant-numeric:tabular-nums}
+.ag-railwrap{flex:1 1 auto;min-width:360px}
+.ag-rail{position:relative;height:20px;border-radius:4px;background:#F2F7FD;border:1px solid #C9DBF1;overflow:hidden}
+.ag-cell{position:absolute;top:0;bottom:0;background:#E3EDFA}
+.ag-cell.alt{background:#D2E2F7}
+.ag-cell.cur{background:#5C93DC}
+.ag-basetick{position:absolute;top:0;bottom:0;width:2px;background:#0F2C61;opacity:.8}
+.ag-pin{position:absolute;top:0;bottom:0;width:0;z-index:2}
+.ag-needle{position:absolute;top:0;bottom:0;left:-1.5px;width:3px;background:#FFFFFF;box-shadow:0 0 0 1.5px rgba(15,44,97,.95);border-radius:1.5px}
+.ag-price{position:absolute;top:50%;transform:translateY(-50%);background:#0F2C61;color:#FFFFFF;font-size:9.5px;line-height:1;padding:3px 7px;border-radius:9px;white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:500;box-shadow:0 1px 3px rgba(15,44,97,.35)}
+.ag-cap{margin-top:3px;font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.ag-cap b{color:var(--ink);font-weight:500}
 .ac-val{margin-left:8px;width:136px;text-align:right;font-size:11px;font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap;flex:0 0 auto}
 .ac-num{font-size:10.5px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;flex:0 0 auto}
 .ac-num b{color:var(--ink);font-weight:500}
@@ -6183,28 +6194,36 @@ function symNameHTML(name, base){
    档位按 basePrice×(1±sp)^格数，把条宽视作 [下轨, 上轨]；文字给出「基准上/下 N 格」。
    建仓阶段 / 参数不全 / 未建格 返回空。 */
 function gridPosInfo(g){
-  const p=g.cond&&g.cond.params; if(!p) return {ov:"",txt:"",tip:""};
+  const p=g.cond&&g.cond.params; if(!p) return null;
   const b=+p.basePrice||0, sp=+p.spacingPct||0, c=+p.currentPrice||0;
-  if(!(b>0)||!(sp>0)||!(sp<1)||!(c>0)) return {ov:"",txt:"",tip:""};
+  if(!(b>0)||!(sp>0)||!(sp<1)||!(c>0)) return null;
   const ug=Math.max(0,+p.upGrids||0), dg=Math.max(0,+p.downGrids||0);
-  const N=ug+dg; if(N<=0) return {ov:"",txt:"",tip:""};
+  const N=ug+dg; if(N<=0) return null;
   const lower=b*Math.pow(1-sp,dg), upper=b*Math.pow(1+sp,ug);
-  const span=upper-lower; if(!(span>0)) return {ov:"",txt:"",tip:""};
+  const span=upper-lower; if(!(span>0)) return null;
   const ratio=clamp((c-lower)/span,0,1);
   const cell=Math.max(0,Math.min(N-1,Math.floor(ratio*N)));            // 现价所在格（0=最下格）
-  const cellLo=lower+cell*(span/N);
   const rel=c>=b? Math.log(c/b)/Math.log(1+sp) : Math.log(c/b)/Math.log(1-sp);
   const n=Math.max(0,Math.round(rel));
-  const txt=(n<=0)? "基准档" : (c>b? "基准上 "+n+" 格" : "基准下 "+n+" 格");
-  const ticks=[];
-  for(let i=0;i<=N;i++) ticks.push('<i class="gk'+(i===dg?" base":"")+'" style="left:'+(i/N*100).toFixed(3)+'%"></i>');
-  const ov='<i class="gc" style="left:'+((cellLo-lower)/span*100).toFixed(3)+'%;width:'+(100/N).toFixed(3)+'%"></i>'
-         + ticks.join("")
-         + '<i class="gm" style="left:'+(ratio*100).toFixed(3)+'%"></i>';
-  const tip='现处 '+txt+'（第 '+(cell+1)+'/'+N+' 格，自下轨往上数）\n'
+  const posTxt=(n<=0)? "基准档" : (c>b? "基准上 "+n+" 格" : "基准下 "+n+" 格");
+  /* 档位尺：钢琴键格纹（奇偶交替浅蓝），现价所在格加深；基准价深色刻度；现价白针+价格牌 */
+  let cells="";
+  for(let i=0;i<N;i++){
+    const cls="ag-cell"+((i%2)?" alt":"")+(i===cell?" cur":"");
+    cells+='<i class="'+cls+'" style="left:'+(i/N*100).toFixed(3)+'%;width:'+(100/N).toFixed(3)+'%"></i>';
+  }
+  const sideRight = ratio<=0.55;   // 价格牌放针的哪一侧（避免出轨）
+  const pin='<span class="ag-pin" style="left:'+(ratio*100).toFixed(3)+'%">'
+    + '<i class="ag-needle"></i>'
+    + '<b class="ag-price" style="'+(sideRight? "left:5px" : "right:5px")+'">'+fmt(c,3)+'</b>'
+    + '</span>';
+  const rail='<div class="ag-rail">'+cells
+    + '<i class="ag-basetick" style="left:'+(dg/N*100).toFixed(3)+'%"></i>'
+    + pin + '</div>';
+  const tip='现处 '+posTxt+'（第 '+(cell+1)+'/'+N+' 格，自下轨往上数）\n'
           + '网格带 ¥'+fmt(lower,3)+' ~ ¥'+fmt(upper,3)+'，共 '+N+' 格\n'
-          + '现价 ¥'+fmt(c,3);
-  return {ov, txt, tip};
+          + '基准价 ¥'+fmt(b,3)+' · 现价 ¥'+fmt(c,3);
+  return {rail, posTxt, tip, lower, upper, base:b, cur:c, N, cell, n};
 }
 function pfAssetsChartHTML(pf){
   const bt=pfBacktest(pf);
@@ -6238,13 +6257,20 @@ function pfAssetsChartHTML(pf){
     const mvp=x.total>0? x.mv/x.total*100 : 0;
     const holdTxt=mvp>0? mvp.toFixed(1)+"%" : "0%";
     const gp=gridPosInfo(x.g);
+    const railRow = gp? `<div class="ac-gridrow">
+        <div class="ag-side"><span class="cap">下轨</span><b>${fmt(gp.lower,3)}</b></div>
+        <div class="ag-railwrap"${gp.tip? ` title="${esc(gp.tip)}"`:""}>${gp.rail}</div>
+        <div class="ag-side"><span class="cap">上轨</span><b>${fmt(gp.upper,3)}</b></div>
+      </div>
+      <div class="ag-cap">现价 <b>¥${fmt(gp.cur,3)}</b> · 现处 <b>${gp.posTxt}</b>（第 ${gp.cell+1}/${gp.N} 格）· 基准 <b>¥${fmt(gp.base,3)}</b></div>` : "";
     return `<div class="ac-item">
       <div class="ac-top">
         <span class="ac-nm" style="font-size:${fitFontSize(x.name,150,12)}px">${esc(x.name)}</span>
-        <span class="ac-bar" style="width:${w}px"${gp.tip? ` title="${esc(gp.tip)}"`:""}>${gp.ov}<i class="mv" style="width:${mvp}%"></i><i class="csh" style="width:${100-mvp}%"></i></span>
+        <span class="ac-bar" style="width:${w}px"><i class="mv" style="width:${mvp}%"></i><i class="csh" style="width:${100-mvp}%"></i></span>
         <span class="ac-val">¥${fmt(x.total,0)} · ${pctTxt}</span>
       </div>
       <div class="ac-num">持仓市值 <b>¥${fmt(x.mv,0)}</b>（持仓占比 <b>${holdTxt}</b>）· 现有现金 <b>¥${fmt(x.cash,0)}</b> · 占组合 <b>${pctTxt}</b></div>
+      ${railRow}
     </div>`;
   }).join("");
   return `<div class="card"><div class="card-body">
@@ -6252,7 +6278,7 @@ function pfAssetsChartHTML(pf){
       <div class="ac-sum"><span class="ac-lbl">资产构成 · 各成员持仓市值 + 现金${freeCash>0? "（含未分配流动现金 ¥"+fmt(freeCash,0)+"）":""}</span><span class="ac-grand">¥${fmt(grand,0)}</span></div>
       <div class="ac-scroll"><div class="ac-list">${items}</div></div>
       <div class="ac-hint">← 左右拖动查看完整内容 →</div>
-      <div class="ac-legend"><span><i class="ac-dot" style="background:#5C93DC"></i>持仓市值</span><span><i class="ac-dot" style="background:#C7DBF5"></i>现有现金</span><span><i class="ac-dot" style="background:#FFFFFF;box-shadow:0 0 0 1px rgba(15,44,97,.95)"></i>现价标记</span></div>
+      <div class="ac-legend"><span><i class="ac-dot" style="background:#5C93DC"></i>持仓市值</span><span><i class="ac-dot" style="background:#C7DBF5"></i>现有现金</span><span style="color:var(--muted)">网格档位尺：左端下轨 → 右端上轨，白针+价格牌 = 现价位置</span></div>
     </div>
   </div></div>`;
 }
