@@ -202,27 +202,35 @@ tbody tr.hl-auto td:first-child{box-shadow:inset 3px 0 0 #2E7D5B}
 .ac-sum{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
 .ac-lbl{font-size:12px;color:var(--muted);letter-spacing:.02em}
 .ac-grand{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink)}
-.ac-list{display:flex;flex-direction:column;gap:9px}
-.ac-item{display:flex;flex-direction:column;gap:5px;min-width:0}
+.ac-list{display:flex;flex-direction:column;gap:10px}
+.ac-item{display:flex;flex-direction:column;gap:5px;min-width:0;border:1px solid var(--line);border-radius:8px;padding:9px 11px;background:var(--surface)}
 .ac-top{display:flex;align-items:center;gap:10px;min-width:0}
 .ac-nm{flex:1 1 auto;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
 .ac-bar{display:flex;height:10px;border-radius:2px;overflow:hidden;background:var(--line);flex:0 0 auto;position:relative}
 .ac-bar .mv{background:#5C93DC}
 .ac-bar .csh{background:#C7DBF5}
-/* 网格档位尺（独立一行，通宽）：左下轨 → 右上轨，钢琴键格纹 + 基准刻度 + 现价针与价格牌 */
+/* 网格档位尺（成员卡片内，固定宽度）：以基准为界，下方绿（跌）上方红（涨），仿标的页红涨绿跌 */
 .ac-gridrow{display:flex;align-items:flex-end;gap:8px;margin-top:4px}
-.ag-side{flex:0 0 auto;width:52px;text-align:center}
+.ag-side{flex:0 0 auto;width:50px;text-align:center}
 .ag-side .cap{display:block;font-size:9px;color:var(--muted);letter-spacing:.08em;margin-bottom:1px}
 .ag-side b{font-size:10px;color:var(--ink);font-weight:500;font-variant-numeric:tabular-nums}
-.ag-railwrap{flex:1 1 auto;min-width:360px}
-.ag-rail{position:relative;height:20px;border-radius:4px;background:#F2F7FD;border:1px solid #C9DBF1;overflow:hidden}
-.ag-cell{position:absolute;top:0;bottom:0;background:#E3EDFA}
-.ag-cell.alt{background:#D2E2F7}
-.ag-cell.cur{background:#5C93DC}
-.ag-basetick{position:absolute;top:0;bottom:0;width:2px;background:#0F2C61;opacity:.8}
+.ag-railwrap{flex:0 0 auto;width:360px}
+.ag-rail{position:relative;height:20px;border-radius:4px;background:#F7F6F1;border:1px solid var(--line);overflow:hidden}
+.ag-cell{position:absolute;top:0;bottom:0}
+.ag-cell.lo{background:#E2F0E7}
+.ag-cell.lo.alt{background:#D0E7DB}
+.ag-cell.lo.cur{background:var(--down)}
+.ag-cell.hi{background:#F9EAE7}
+.ag-cell.hi.alt{background:#F2D8D3}
+.ag-cell.hi.cur{background:var(--up)}
+.ag-basetick{position:absolute;top:0;bottom:0;width:2px;background:var(--ink);opacity:.75}
 .ag-pin{position:absolute;top:0;bottom:0;width:0;z-index:2}
-.ag-needle{position:absolute;top:0;bottom:0;left:-1.5px;width:3px;background:#FFFFFF;box-shadow:0 0 0 1.5px rgba(15,44,97,.95);border-radius:1.5px}
-.ag-price{position:absolute;top:50%;transform:translateY(-50%);background:#0F2C61;color:#FFFFFF;font-size:9.5px;line-height:1;padding:3px 7px;border-radius:9px;white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:500;box-shadow:0 1px 3px rgba(15,44,97,.35)}
+.ag-needle{position:absolute;top:0;bottom:0;left:-1.5px;width:3px;background:#FFFFFF;border-radius:1.5px}
+.ag-needle.lo{box-shadow:0 0 0 1.5px rgba(46,125,91,.95)}
+.ag-needle.hi{box-shadow:0 0 0 1.5px rgba(178,58,46,.95)}
+.ag-price{position:absolute;top:50%;transform:translateY(-50%);color:#FFFFFF;font-size:9.5px;line-height:1;padding:3px 7px;border-radius:9px;white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:500;box-shadow:0 1px 3px rgba(27,26,23,.25)}
+.ag-price.lo{background:var(--down)}
+.ag-price.hi{background:var(--up)}
 .ag-cap{margin-top:3px;font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
 .ag-cap b{color:var(--ink);font-weight:500}
 .ac-val{margin-left:8px;width:136px;text-align:right;font-size:11px;font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap;flex:0 0 auto}
@@ -6206,16 +6214,19 @@ function gridPosInfo(g){
   const rel=c>=b? Math.log(c/b)/Math.log(1+sp) : Math.log(c/b)/Math.log(1-sp);
   const n=Math.max(0,Math.round(rel));
   const posTxt=(n<=0)? "基准档" : (c>b? "基准上 "+n+" 格" : "基准下 "+n+" 格");
-  /* 档位尺：钢琴键格纹（奇偶交替浅蓝），现价所在格加深；基准价深色刻度；现价白针+价格牌 */
+  /* 档位尺：以基准为界分两侧——下方绿（跌）、上方红（涨），奇偶交替格纹，现价所在格加深；
+     基准价深色刻度；现价白针+价格牌（牌色跟侧，仿标的页红涨绿跌） */
   let cells="";
   for(let i=0;i<N;i++){
-    const cls="ag-cell"+((i%2)?" alt":"")+(i===cell?" cur":"");
+    const side=(i<dg)? "lo" : "hi";
+    const cls="ag-cell "+side+((i%2)?" alt":"")+(i===cell?" cur":"");
     cells+='<i class="'+cls+'" style="left:'+(i/N*100).toFixed(3)+'%;width:'+(100/N).toFixed(3)+'%"></i>';
   }
+  const cSide=(c<b)? "lo" : "hi";
   const sideRight = ratio<=0.55;   // 价格牌放针的哪一侧（避免出轨）
   const pin='<span class="ag-pin" style="left:'+(ratio*100).toFixed(3)+'%">'
-    + '<i class="ag-needle"></i>'
-    + '<b class="ag-price" style="'+(sideRight? "left:5px" : "right:5px")+'">'+fmt(c,3)+'</b>'
+    + '<i class="ag-needle '+cSide+'"></i>'
+    + '<b class="ag-price '+cSide+'" style="'+(sideRight? "left:5px" : "right:5px")+'">'+fmt(c,3)+'</b>'
     + '</span>';
   const rail='<div class="ag-rail">'+cells
     + '<i class="ag-basetick" style="left:'+(dg/N*100).toFixed(3)+'%"></i>'
@@ -6278,7 +6289,7 @@ function pfAssetsChartHTML(pf){
       <div class="ac-sum"><span class="ac-lbl">资产构成 · 各成员持仓市值 + 现金${freeCash>0? "（含未分配流动现金 ¥"+fmt(freeCash,0)+"）":""}</span><span class="ac-grand">¥${fmt(grand,0)}</span></div>
       <div class="ac-scroll"><div class="ac-list">${items}</div></div>
       <div class="ac-hint">← 左右拖动查看完整内容 →</div>
-      <div class="ac-legend"><span><i class="ac-dot" style="background:#5C93DC"></i>持仓市值</span><span><i class="ac-dot" style="background:#C7DBF5"></i>现有现金</span><span style="color:var(--muted)">网格档位尺：左端下轨 → 右端上轨，白针+价格牌 = 现价位置</span></div>
+      <div class="ac-legend"><span><i class="ac-dot" style="background:#5C93DC"></i>持仓市值</span><span><i class="ac-dot" style="background:#C7DBF5"></i>现有现金</span><span style="color:var(--muted)">网格档位尺：绿=基准下方（跌）· 红=基准上方（涨）· 白针+价格牌 = 现价</span></div>
     </div>
   </div></div>`;
 }
