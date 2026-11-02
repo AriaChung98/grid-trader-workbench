@@ -1159,24 +1159,69 @@ function recordDeviceVisit(){
         body:JSON.stringify([{ts:new Date().toISOString(), note:"visit|"+d.id+"|"+d.label}])},2);
     }).catch(()=>{});
 }
-function renderDeviceLog(){
+/* 设备记录 / 心跳记录分页（每页 10 条）：一次查询同表拆两类，
+   note=visit|id|label 为设备打开；note=keepalive 为保活心跳（只取近 10 天）。
+   行数据缓存 60 秒：行情自动刷新会整体重渲染设置页，复用缓存并保留页码，
+   只有用户点「刷新」（force=true）才复位到第 1 页并重新查询。 */
+let _devLogPage=1, _hbLogPage=1, _logRows=null, _logRowsAt=0, _logRowsUrl="";
+const LOG_PAGE_SIZE=10;
+function logPageOf(d, key){
+  if(key==="dev") _devLogPage=Math.max(1,_devLogPage+d); else _hbLogPage=Math.max(1,_hbLogPage+d);
+  renderDeviceLog();
+}
+function logPagerHTML(total, page, key){
+  const pages=Math.max(1, Math.ceil(total/LOG_PAGE_SIZE));
+  if(pages<=1) return "";
+  return '<div style="display:flex;gap:10px;align-items:center;margin-top:6px;font-size:12px">'
+    +'<button class="btn ghost" style="padding:2px 10px" onclick="logPageOf(-1,\''+key+'\')"'+(page<=1?" disabled":"")+'>上一页</button>'
+    +'<span style="color:var(--muted)">第 '+page+' / '+pages+' 页</span>'
+    +'<button class="btn ghost" style="padding:2px 10px" onclick="logPageOf(1,\''+key+'\')"'+(page>=pages?" disabled":"")+'>下一页</button></div>';
+}
+function renderLogBoxes(el, hbEl){
+  const me=deviceInfo().id;
+  const d10=Date.now()-10*864e5;
+  const visits=[], beats=[];
+  (_logRows||[]).forEach(x=>{ const n=String(x.note||"");
+    if(n.startsWith("visit|")){ const p=n.split("|"); visits.push({ts:x.ts, id:p[1]||"", label:p[2]||"未知设备"}); }
+    else if(new Date(x.ts).getTime()>=d10) beats.push({ts:x.ts}); });
+  // 设备打开记录：分页展示
+  if(!visits.length){ el.innerHTML='<span style="color:var(--muted)">暂无记录（各设备打开工作台约 1 分钟后会出现）</span>'; }
+  else{
+    const pages=Math.max(1,Math.ceil(visits.length/LOG_PAGE_SIZE));
+    if(_devLogPage>pages) _devLogPage=pages;
+    const st=(_devLogPage-1)*LOG_PAGE_SIZE;
+    el.innerHTML=visits.slice(st, st+LOG_PAGE_SIZE).map(v=>
+      '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:2px 0">'
+      +'<span>'+(v.id===me? "<b>"+esc(v.label)+"</b>（本机）" : esc(v.label))+'</span>'
+      +'<span style="color:var(--muted)">'+syncFmtT(v.ts)+'</span></div>').join("")
+      +logPagerHTML(visits.length, _devLogPage, "dev");
+  }
+  // 保活心跳记录：近 10 天，分页展示
+  if(hbEl){
+    if(!beats.length){ hbEl.innerHTML='<span style="color:var(--muted)">近 10 天暂无心跳（GitHub Actions 每日 07:00/23:00 写入）</span>'; }
+    else{
+      const pages=Math.max(1,Math.ceil(beats.length/LOG_PAGE_SIZE));
+      if(_hbLogPage>pages) _hbLogPage=pages;
+      const st=(_hbLogPage-1)*LOG_PAGE_SIZE;
+      hbEl.innerHTML=beats.slice(st, st+LOG_PAGE_SIZE).map(b=>
+        '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:2px 0">'
+        +'<span>保活心跳</span><span style="color:var(--muted)">'+syncFmtT(b.ts)+'</span></div>').join("")
+        +logPagerHTML(beats.length, _hbLogPage, "hb");
+    }
+  }
+}
+function renderDeviceLog(force){
   const el=$("devLogBox"); if(!el) return;
-  const c=cloudCfg(); if(!c){ el.innerHTML='<span style="color:var(--muted)">云端同步未启用，不记录设备</span>'; return; }
+  const hbEl=$("hbLogBox");
+  const c=cloudCfg(); if(!c){ el.innerHTML='<span style="color:var(--muted)">云端同步未启用，不记录设备</span>'; if(hbEl) hbEl.innerHTML='<span style="color:var(--muted)">云端同步未启用</span>'; return; }
+  if(force){ _devLogPage=1; _hbLogPage=1; _logRows=null; }
+  const fresh=_logRows && _logRowsUrl===c.url && (Date.now()-_logRowsAt<60e3);
+  if(fresh){ renderLogBoxes(el, hbEl); return; }
   el.innerHTML='<span style="color:var(--muted)">查询中…</span>';
-  cfetch(`${c.url}/rest/v1/gridtrader_heartbeat?select=ts,note&order=ts.desc&limit=40`,{headers:cloudHeaders()},2)
+  cfetch(`${c.url}/rest/v1/gridtrader_heartbeat?select=ts,note&order=ts.desc&limit=200`,{headers:cloudHeaders()},2)
     .then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
-    .then(rows=>{
-      const visits=(rows||[]).map(x=>{ const n=String(x.note||""); if(!n.startsWith("visit|")) return null;
-        const p=n.split("|"); return {ts:x.ts, id:p[1]||"", label:p[2]||"未知设备"}; }).filter(Boolean).slice(0,12);
-      if(!visits.length){ el.innerHTML='<span style="color:var(--muted)">暂无记录（各设备打开工作台约 1 分钟后会出现）</span>'; return; }
-      const me=deviceInfo().id;
-      el.innerHTML=visits.map(v=>{
-        const t=syncFmtT(v.ts);
-        return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:2px 0">'
-          +'<span>'+(v.id===me? "<b>"+esc(v.label)+"</b>（本机）" : esc(v.label))+'</span>'
-          +'<span style="color:var(--muted)">'+t+'</span></div>';
-      }).join("");
-    }).catch(e=>{ el.innerHTML='<span style="color:var(--muted)">设备记录查询失败（'+e.message+'）</span>'; });
+    .then(rows=>{ _logRows=rows||[]; _logRowsAt=Date.now(); _logRowsUrl=c.url; renderLogBoxes(el, hbEl); })
+    .catch(e=>{ _logRows=null; el.innerHTML='<span style="color:var(--muted)">设备记录查询失败（'+e.message+'）</span>'; });
 }
 /* 编辑云端连接信息：输入框默认只读（防误触改错凭证导致同步指向错误项目），
    点「编辑连接信息」→ 二次确认后才解锁；解锁后须点「保存并测试连接」生效。 */
@@ -5358,10 +5403,17 @@ function renderCloudPanel(){
       <div class="note">已启用云端同步：交易自动上传、多端同步、行情走云端代理。</div>
       <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <span style="font-size:12px;color:var(--muted)">设备打开记录（近 30 天 · 定位多设备分叉来源）</span>
-          <button class="btn ghost" onclick="renderDeviceLog()">刷新</button>
+          <span style="font-size:12px;color:var(--muted)">设备打开记录（近 30 天 · 每页 10 条 · 定位多设备分叉来源）</span>
+          <button class="btn ghost" onclick="renderDeviceLog(true)">刷新</button>
         </div>
         <div id="devLogBox" style="margin-top:4px">加载中…</div>
+      </div>
+      <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <span style="font-size:12px;color:var(--muted)">保活心跳记录（近 10 天 · 每页 10 条 · GitHub Actions 每日 07:00/23:00 写入）</span>
+          <button class="btn ghost" onclick="renderDeviceLog(true)">刷新</button>
+        </div>
+        <div id="hbLogBox" style="margin-top:4px">加载中…</div>
       </div>
       <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
         <div style="font-size:12px;color:var(--muted);margin-bottom:4px">数据备份与恢复（每天自动快照，收盘后约 15:30 强制生成当日最终态，滚动保留 60 天）</div>
