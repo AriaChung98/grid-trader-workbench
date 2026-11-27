@@ -1139,25 +1139,64 @@ function resolveSyncConflict(side){
 /* 设备打开记录：复用 gridtrader_heartbeat 表（note=visit|设备ID|标签，30 天随心跳滚动清理），
    用于回答「哪些设备打开过工作台」——多设备数据分叉/污染时可定位来源。 */
 const KEY_DEVID=LS+"devid";
-function deviceInfo(){
+const KEY_DEVOS=LS+"devos";
+/* 设备标签要有区分度：navigator.platform 在 Windows 上恒为 "Win32"，
+   故改用「系统+版本 · 浏览器+大版本 · 屏幕分辨率 · CPU核数」四元组。
+   Windows 10/11 在 UA 里同为 NT 10.0，需 UA-CH 的 platformVersion（13+=Win11），
+   异步精修一次后缓存本地（KEY_DEVOS）。 */
+function deviceInfo(osv){
   let id=""; try{ id=localStorage.getItem(KEY_DEVID)||""; }catch(e){}
   if(!id){ id="d"+Math.random().toString(36).slice(2,8)+Date.now().toString(36).slice(-4); try{ localStorage.setItem(KEY_DEVID,id); }catch(e){} }
-  const pf=(navigator.platform||"").replace(/^Win/,"Windows").replace(/^Mac/,"macOS")||"未知系统";
   const ua=navigator.userAgent||"";
-  const br=/Edg\//.test(ua)?"Edge":/Chrome\//.test(ua)?"Chrome":/Firefox\//.test(ua)?"Firefox":/Safari\//.test(ua)?"Safari":"浏览器";
-  return {id, label:pf+" · "+br};
+  let os="未知系统";
+  if(/Windows NT/.test(ua)){
+    let v=osv||""; if(!v){ try{ v=localStorage.getItem(KEY_DEVOS)||""; }catch(e){} }
+    os= v? "Windows "+v : "Windows";
+  }
+  else{ const am=/Android (\d+)/.exec(ua); if(am) os="Android "+am[1];
+    else if(/iPhone|iPad|iPod/.test(ua)) os="iOS";
+    else if(/Mac OS X/.test(ua)) os="macOS";
+    else if(/Linux/.test(ua)) os="Linux";
+    else { const pf=(navigator.platform||"").replace(/^Win/,"Windows").replace(/^Mac/,"macOS"); if(pf) os=pf; } }
+  let br="浏览器";
+  const eg=/Edg\/(\d+)/.exec(ua), cg=/Chrome\/(\d+)/.exec(ua), fg=/Firefox\/(\d+)/.exec(ua), sg=/Version\/(\d+)\..*Safari/.exec(ua);
+  if(/MicroMessenger/.test(ua)) br="微信";
+  else if(eg) br="Edge"+eg[1];
+  else if(cg) br="Chrome"+cg[1];
+  else if(fg) br="Firefox"+fg[1];
+  else if(sg) br="Safari"+sg[1];
+  const scr=(screen&&screen.width)? screen.width+"×"+screen.height : "";
+  const cores=navigator.hardwareConcurrency? navigator.hardwareConcurrency+"核" : "";
+  return { id, label:[os,br,scr,cores].filter(Boolean).join(" · ") };
+}
+function refineDeviceOS(){
+  try{
+    const cached=localStorage.getItem(KEY_DEVOS); if(cached) return Promise.resolve(cached);
+    const uad=navigator.userAgentData;
+    if(uad&&uad.getHighEntropyValues&&/Windows/i.test(String(uad.platform||""))){
+      return uad.getHighEntropyValues(["platformVersion"]).then(v=>{
+        const maj=parseInt(String((v&&v.platformVersion)||"").split(".")[0],10);
+        const osv= maj>=13? "11" : "10";
+        try{ localStorage.setItem(KEY_DEVOS,osv); }catch(e){}
+        return osv;
+      }).catch(()=>{ return ""; });
+    }
+  }catch(e){}
+  return Promise.resolve("");
 }
 function recordDeviceVisit(){
   const c=cloudCfg(); if(!c) return;
-  const d=deviceInfo();
-  cfetch(`${c.url}/rest/v1/gridtrader_heartbeat?select=ts,note&order=ts.desc&limit=30`,{headers:cloudHeaders()},2)
-    .then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
-    .then(rows=>{
-      const mine=(rows||[]).filter(x=>String(x.note||"").startsWith("visit|"+d.id+"|"));
-      if(mine.length && (Date.now()-new Date(mine[0].ts).getTime())<60*60*1000) return;   // 同设备 1 小时去重
-      return cfetch(`${c.url}/rest/v1/gridtrader_heartbeat`,{method:"POST",headers:cloudHeaders(),
-        body:JSON.stringify([{ts:new Date().toISOString(), note:"visit|"+d.id+"|"+d.label}])},2);
-    }).catch(()=>{});
+  refineDeviceOS().then((osv)=>{
+    const d=deviceInfo(osv);
+    cfetch(`${c.url}/rest/v1/gridtrader_heartbeat?select=ts,note&order=ts.desc&limit=30`,{headers:cloudHeaders()},2)
+      .then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+      .then(rows=>{
+        const mine=(rows||[]).filter(x=>String(x.note||"").startsWith("visit|"+d.id+"|"));
+        if(mine.length && (Date.now()-new Date(mine[0].ts).getTime())<60*60*1000) return;   // 同设备 1 小时去重
+        return cfetch(`${c.url}/rest/v1/gridtrader_heartbeat`,{method:"POST",headers:cloudHeaders(),
+          body:JSON.stringify([{ts:new Date().toISOString(), note:"visit|"+d.id+"|"+d.label}])},2);
+      }).catch(()=>{});
+  }).catch(()=>{});
 }
 /* 设备记录 / 心跳记录分页（每页 10 条）：一次查询同表拆两类，
    note=visit|id|label 为设备打开；note=keepalive 为保活心跳（只取近 10 天）。
@@ -1191,8 +1230,8 @@ function renderLogBoxes(el, hbEl){
     if(_devLogPage>pages) _devLogPage=pages;
     const st=(_devLogPage-1)*LOG_PAGE_SIZE;
     el.innerHTML=visits.slice(st, st+LOG_PAGE_SIZE).map(v=>
-      '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:2px 0">'
-      +'<span>'+(v.id===me? "<b>"+esc(v.label)+"</b>（本机）" : esc(v.label))+'</span>'
+      '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:2px 0;flex-wrap:wrap">'
+      +'<span style="min-width:0;word-break:break-all">'+(v.id===me? "<b>"+esc(v.label)+"</b>（本机）" : esc(v.label))+'</span>'
       +'<span style="color:var(--muted)">'+syncFmtT(v.ts)+'</span></div>').join("")
       +logPagerHTML(visits.length, _devLogPage, "dev");
   }
